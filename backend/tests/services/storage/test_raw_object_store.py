@@ -1,6 +1,7 @@
 import pytest
 import tempfile
 import hashlib
+import os
 from dicom_ingestion.services.storage.raw_object_store import RawObjectStore
 
 @pytest.fixture
@@ -39,9 +40,28 @@ def test_put_then_get_returns_identical_bytes(store):
     
     assert retrieved == data
 
-def test_get_fails_on_path_traversal(store):
+def test_get_fails_on_absolute_path_outside_base(store):
     with pytest.raises(ValueError, match="outside the bounds"):
         store.get("/etc/passwd")
+
+def test_get_fails_on_sibling_prefix_bypass(store):
+    """
+    /tmp/base_evil/file starts with /tmp/base, but is NOT inside /tmp/base.
+    A startswith() check would incorrectly pass. commonpath() correctly rejects it.
+    """
+    sibling_path = store.base_dir + "_evil/file"
+    with pytest.raises(ValueError, match="outside the bounds"):
+        store.get(sibling_path)
+
+def test_exists_fails_on_sibling_prefix_bypass(store):
+    sibling_path = store.base_dir + "_evil/file"
+    with pytest.raises(ValueError, match="outside the bounds"):
+        store.exists(sibling_path)
+
+def test_delete_fails_on_sibling_prefix_bypass(store):
+    sibling_path = store.base_dir + "_evil/file"
+    with pytest.raises(ValueError, match="outside the bounds"):
+        store.delete(sibling_path)
 
 def test_exists_returns_false_for_unknown_uri(store):
     assert not store.exists(store.base_dir + "/nonexistent")
@@ -55,3 +75,4 @@ def test_delete_removes_file(store):
     
     store.delete(result["uri"])
     assert not store.exists(result["uri"])
+

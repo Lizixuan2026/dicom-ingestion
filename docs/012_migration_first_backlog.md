@@ -910,7 +910,7 @@ spec/services/dicom/duplicates/duplicate_detector_spec.rb
 **Acceptance:**
 
 - [ ] identity duplicate: second SOP UID creates finding with `duplicate_type = identity`, `basis = sop_instance_uid`
-- [ ] content duplicate: same `whole_file_sha256` for different SOP UID creates finding with `duplicate_type = content`
+- [ ] content duplicate: same `pixel_digest` (PixelData hash) for different SOP UID creates finding with `duplicate_type = content`, `basis = pixel_digest`
 - [ ] finding row is idempotent on retry (unique constraint, not application logic)
 - [ ] canonical observation on the original instance is unchanged
 - [ ] DB-level uniqueness constraints reject duplicate finding rows for every valid retry shape (see A1-j partial indexes)

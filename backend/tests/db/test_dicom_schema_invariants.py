@@ -110,3 +110,41 @@ def test_private_tags_cascade(session):
     
     res = session.execute(sa.text(f"SELECT count(*) FROM dicom_private_tags WHERE observation_id = {obs_id}")).scalar()
     assert res == 0
+def test_canonical_valid_circular_insert(session):
+    study_id = session.execute(sa.text("INSERT INTO dicom_studies (study_instance_uid) VALUES ('sd7') RETURNING id")).scalar()
+    series_id = session.execute(sa.text(f"INSERT INTO dicom_series (study_id, series_instance_uid) VALUES ({study_id}, 'se7') RETURNING id")).scalar()
+    
+    # 1. Insert instance
+    instance_id = session.execute(sa.text(f"INSERT INTO dicom_instances (study_id, series_id, sop_instance_uid) VALUES ({study_id}, {series_id}, 'so7') RETURNING id")).scalar()
+    
+    job_id = session.execute(sa.text("INSERT INTO dicom_ingestion_jobs (actor_id, source_type) VALUES ('a', 's') RETURNING id")).scalar()
+    item_id = session.execute(sa.text(f"INSERT INTO dicom_ingestion_items (ingestion_job_id, item_fingerprint) VALUES ({job_id}, 'fp7') RETURNING id")).scalar()
+    
+    # 2. Insert observation
+    obs_id = session.execute(sa.text(f"INSERT INTO dicom_instance_observations (instance_id, ingestion_item_id, observed_at) VALUES ({instance_id}, {item_id}, now()) RETURNING id")).scalar()
+    
+    # 3. Update canonical circular
+    session.execute(sa.text(f"UPDATE dicom_instances SET current_canonical_observation_id = {obs_id} WHERE id = {instance_id}"))
+    session.flush()
+
+def test_canonical_cross_instance_rejection(session):
+    study_id = session.execute(sa.text("INSERT INTO dicom_studies (study_instance_uid) VALUES ('sd8') RETURNING id")).scalar()
+    series_id = session.execute(sa.text(f"INSERT INTO dicom_series (study_id, series_instance_uid) VALUES ({study_id}, 'se8') RETURNING id")).scalar()
+    
+    # Insert instance A and observation A
+    instance_a = session.execute(sa.text(f"INSERT INTO dicom_instances (study_id, series_id, sop_instance_uid) VALUES ({study_id}, {series_id}, 'so8A') RETURNING id")).scalar()
+    job_id = session.execute(sa.text("INSERT INTO dicom_ingestion_jobs (actor_id, source_type) VALUES ('a', 's') RETURNING id")).scalar()
+    item_id = session.execute(sa.text(f"INSERT INTO dicom_ingestion_items (ingestion_job_id, item_fingerprint) VALUES ({job_id}, 'fp8') RETURNING id")).scalar()
+    obs_a = session.execute(sa.text(f"INSERT INTO dicom_instance_observations (instance_id, ingestion_item_id, observed_at) VALUES ({instance_a}, {item_id}, now()) RETURNING id")).scalar()
+    
+    # Insert instance B
+    instance_b = session.execute(sa.text(f"INSERT INTO dicom_instances (study_id, series_id, sop_instance_uid) VALUES ({study_id}, {series_id}, 'so8B') RETURNING id")).scalar()
+    
+    # Attempt to set instance B's canonical obs to obs_a (cross-instance)
+    session.execute(sa.text(f"UPDATE dicom_instances SET current_canonical_observation_id = {obs_a} WHERE id = {instance_b}"))
+    
+    # The composite FK requires (current_canonical_observation_id, instance_id) to match
+    # Since obs_a belongs to instance_a, this violates the FK.
+    with pytest.raises(IntegrityError):
+        with session.begin_nested():
+            session.execute(sa.text("SET CONSTRAINTS ALL IMMEDIATE"))

@@ -36,29 +36,42 @@ class RawObjectStore:
 
         return {"uri": uri}
 
+    def _resolve_safe_path(self, uri: str) -> str:
+        """
+        Resolves the URI to an absolute path and strictly ensures it does not
+        escape the configured base_dir.
+        """
+        abs_base = os.path.abspath(self.base_dir)
+        abs_uri = os.path.abspath(uri)
+        try:
+            if os.path.commonpath([abs_base, abs_uri]) != abs_base:
+                raise ValueError(f"URI is outside the bounds of base_dir: {uri}")
+        except ValueError:
+            raise ValueError(f"URI is outside the bounds of base_dir: {uri}")
+        return abs_uri
+
     def get(self, uri: str) -> Optional[bytes]:
         """
         Retrieves the exact bytes stored at the URI.
         """
-        # Security: Ensure uri doesn't traverse out of base_dir
-        if not os.path.normpath(uri).startswith(os.path.normpath(self.base_dir)):
-            raise ValueError(f"URI is outside the bounds of base_dir: {uri}")
-
-        if not os.path.exists(uri):
+        safe_uri = self._resolve_safe_path(uri)
+        if not os.path.exists(safe_uri):
             return None
-        with open(uri, "rb") as f:
+        with open(safe_uri, "rb") as f:
             return f.read()
 
     def exists(self, uri: str) -> bool:
         """
         Checks if the given URI exists in the store.
         """
-        return os.path.exists(uri)
+        safe_uri = self._resolve_safe_path(uri)
+        return os.path.exists(safe_uri)
 
     def delete(self, uri: str) -> None:
         """
         Deletes the file at the given URI. 
         Only intended for test cleanup and temp GC.
         """
-        if os.path.exists(uri):
-            os.remove(uri)
+        safe_uri = self._resolve_safe_path(uri)
+        if os.path.exists(safe_uri):
+            os.remove(safe_uri)
