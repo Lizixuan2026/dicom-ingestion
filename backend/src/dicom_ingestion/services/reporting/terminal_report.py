@@ -2,17 +2,23 @@
 
 This module provides the TerminalReportService which converts ingest outcomes
 into terminal candidate-level reports with per-upload summaries.
+
+Consistency semantics: strong consistency for reads after generate_job_report in
+the same database transaction boundary. Persistence in DB is the source of truth;
+in-memory cache is an optional best-effort acceleration layer with TTL/LRU bounds.
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional
 
+
 if TYPE_CHECKING:
     from dicom_ingestion.models.ingestion_item import IngestionItem
+    from dicom_ingestion.repositories.terminal_report_repository import TerminalReportRepository
 
 logger = logging.getLogger(__name__)
 
@@ -161,10 +167,13 @@ class TerminalReportService:
     stable, queryable record of what happened during ingestion.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, repository: Optional["TerminalReportRepository"] = None, cache_ttl_seconds: int = 120, cache_max_size: int = 128) -> None:
         """Initialize the terminal report service."""
         self._logger = logger
-        self._reports: dict[int, TerminalReport] = {}
+        self._repository = repository
+        self._cache_ttl = timedelta(seconds=cache_ttl_seconds)
+        self._cache_max_size = cache_max_size
+        self._reports: dict[int, tuple[datetime, TerminalReport]] = {}
 
     async def generate_job_report(
         self,
@@ -207,8 +216,10 @@ class TerminalReportService:
             },
         )
 
-        # Store report
-        self._reports[job_id] = report
+        # Persist as source of truth and update best-effort cache
+        if self._repository is not None:
+            self._repository.upsert_report(report.to_dict())
+        self._cache_report(job_id, report)
 
         self._logger.info(
             "Generated report for job %d: total=%d, accepted=%d, rejected=%d, failed=%d",
@@ -336,55 +347,64 @@ class TerminalReportService:
 
         return report
 
+    def _cache_report(self, job_id: int, report: TerminalReport) -> None:
+        self._reports[job_id] = (datetime.utcnow(), report)
+        if len(self._reports) > self._cache_max_size:
+            oldest = min(self._reports.items(), key=lambda kv: kv[1][0])[0]
+            self._reports.pop(oldest, None)
+
+    def _get_cached_report(self, job_id: int) -> Optional[TerminalReport]:
+        cached = self._reports.get(job_id)
+        if not cached:
+            return None
+        cached_at, report = cached
+        if datetime.utcnow() - cached_at > self._cache_ttl:
+            self._reports.pop(job_id, None)
+            return None
+        return report
+
+    def _deserialize_report(self, payload: dict[str, Any]) -> TerminalReport:
+        summary_payload = payload["summary"]
+        summary = JobTerminalSummary(
+            job_id=summary_payload["job_id"],
+            total_items=summary_payload["total_items"],
+            accepted_count=summary_payload["accepted_count"],
+            quarantined_count=summary_payload["quarantined_count"],
+            rejected_count=summary_payload["rejected_count"],
+            failed_count=summary_payload["failed_count"],
+            duplicate_findings=summary_payload["duplicate_findings"],
+            unresolved_references=summary_payload["unresolved_references"],
+            classification=summary_payload["classification"],
+            report_ready=summary_payload["report_ready"],
+            generated_at=summary_payload["generated_at"] if isinstance(summary_payload["generated_at"], datetime) else datetime.fromisoformat(summary_payload["generated_at"]),
+        )
+        items = [ItemTerminalReport(**{k: v for k, v in item.items() if k in ItemTerminalReport.__dataclass_fields__}) for item in payload.get("items", [])]
+        return TerminalReport(summary=summary, items=items, metadata=payload.get("metadata") or {})
+
     def get_report(self, job_id: int) -> Optional[TerminalReport]:
-        """Get a previously generated report.
-
-        Args:
-            job_id: Job ID
-
-        Returns:
-            Terminal report if found, None otherwise
-        """
-        return self._reports.get(job_id)
+        report = self._get_cached_report(job_id)
+        if report:
+            return report
+        if self._repository is None:
+            return None
+        payload = self._repository.get_report(job_id)
+        if payload is None:
+            return None
+        report = self._deserialize_report(payload)
+        self._cache_report(job_id, report)
+        return report
 
     def get_all_reports(self) -> dict[int, TerminalReport]:
-        """Get all generated reports.
+        return {job_id: report for job_id, (_, report) in self._reports.items()}
 
-        Returns:
-            Dictionary of job_id to report
-        """
-        return self._reports.copy()
-
-    def query_items_by_status(
-        self,
-        job_id: int,
-        status: str,
-    ) -> list[ItemTerminalReport]:
-        """Query items by terminal status.
-
-        Args:
-            job_id: Job ID
-            status: Terminal status to filter by
-
-        Returns:
-            List of item reports matching the status
-        """
-        report = self._reports.get(job_id)
+    def query_items_by_status(self, job_id: int, status: str) -> list[ItemTerminalReport]:
+        report = self.get_report(job_id)
         if not report:
             return []
-
         return [item for item in report.items if item.terminal_outcome == status]
 
     def is_terminal_status_queryable(self, job_id: int) -> bool:
-        """Check if terminal status is queryable for a job.
-
-        Args:
-            job_id: Job ID
-
-        Returns:
-            True if report exists and is complete
-        """
-        report = self._reports.get(job_id)
+        report = self.get_report(job_id)
         if not report:
             return False
         return report.summary.report_ready
@@ -398,7 +418,7 @@ class TerminalReportService:
         Returns:
             Dictionary with failure summary
         """
-        report = self._reports.get(job_id)
+        report = self.get_report(job_id)
         if not report:
             return {"error": "Report not found"}
 
