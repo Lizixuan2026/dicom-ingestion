@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -433,6 +433,39 @@ class CanonicalPersistenceService:
         )
         return result.fetchone()[0]
 
+
+    def _json_fallback_serializer(self, value: Any) -> str:
+        """Fallback serializer for non-JSON-native tag values."""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        return str(value)
+
+    def _safe_json_dumps(self, raw_tag_set: Any, item_id: int) -> Optional[str]:
+        """Safely serialize raw tag set to JSON.
+
+        Tries strict JSON first, then falls back to permissive conversion.
+        Returns None when serialization is impossible.
+        """
+        if not raw_tag_set:
+            return None
+
+        try:
+            return json.dumps(raw_tag_set)
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            return json.dumps(raw_tag_set, default=self._json_fallback_serializer)
+        except (TypeError, ValueError) as exc:
+            self._logger.warning(
+                "Raw tag set serialization failed for item %s: %s",
+                item_id,
+                exc,
+            )
+            return None
+
     async def _create_observation(
         self,
         instance_id: int,
@@ -481,7 +514,7 @@ class CanonicalPersistenceService:
                 "whole_file_sha256": raw_bytes_hash,
                 "pixel_digest": None,  # Would need pixel extraction for this
                 "raw_tag_set_uri": None,  # Could store to object storage if needed
-                "raw_tag_set_json": json.dumps(raw_tag_set) if raw_tag_set else None,
+                "raw_tag_set_json": self._safe_json_dumps(raw_tag_set, item.id),
             }
         )
         return result.fetchone()[0]
