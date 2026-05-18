@@ -127,3 +127,11 @@ Open Batch 1 now using:
 2. `003_batch_1_worktree_lanes.md`
 3. `004_batch_1_definition_of_done.md`
 4. `005_batch_1_handoff_checklist.md`
+
+After Batch 1, continue in order with:
+
+5. `006_batch_2_execution_plan.md`
+6. `007_batch_3_execution_plan.md`
+7. `008_batch_4_execution_plan.md`
+8. `009_batch_5_execution_plan.md`
+9. `010_batch_6_execution_plan.md`
