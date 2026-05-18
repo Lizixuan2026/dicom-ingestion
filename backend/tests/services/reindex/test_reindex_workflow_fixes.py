@@ -81,6 +81,107 @@ class TestSQLAliasConsistency:
         assert step_result.status == "success"
         assert step_result.details["affected_instances"] == 50
 
+    @pytest.mark.asyncio
+    async def test_analyze_step_with_scope_study(self):
+        """_step_analyze with scope=study should use correct SQL alias."""
+        mock_session = MagicMock()
+
+        count_result = MagicMock()
+        count_result.scalar.return_value = 25
+        mock_session.execute.return_value = count_result
+
+        workflow = ReindexWorkflow(session=mock_session)
+
+        from dicom_ingestion.services.reindex.reindex_workflow import StepResult
+        job = ReindexJob(
+            name="Test",
+            description="",
+            created_by="admin",
+            scope="study",
+            scope_params={"study_uid": "1.2.3.4"},
+            steps=["validate", "analyze"]
+        )
+        step_result = StepResult(step="analyze")
+
+        await workflow._step_analyze(job, False, step_result)
+
+        assert step_result.status == "success"
+        assert step_result.details["affected_instances"] == 25
+
+        # Verify SQL uses 'i' alias consistently
+        executed_sql = mock_session.execute.call_args[0][0]
+        assert "FROM dicom_instances i" in executed_sql
+        assert "i.current_canonical_observation_id" in executed_sql
+        assert "JOIN dicom_studies st ON st.id = i.study_id" in executed_sql
+
+    @pytest.mark.asyncio
+    async def test_analyze_step_with_scope_series(self):
+        """_step_analyze with scope=series should use correct SQL alias."""
+        mock_session = MagicMock()
+
+        count_result = MagicMock()
+        count_result.scalar.return_value = 10
+        mock_session.execute.return_value = count_result
+
+        workflow = ReindexWorkflow(session=mock_session)
+
+        from dicom_ingestion.services.reindex.reindex_workflow import StepResult
+        job = ReindexJob(
+            name="Test",
+            description="",
+            created_by="admin",
+            scope="series",
+            scope_params={"series_uid": "1.2.3.4.5"},
+            steps=["validate", "analyze"]
+        )
+        step_result = StepResult(step="analyze")
+
+        await workflow._step_analyze(job, False, step_result)
+
+        assert step_result.status == "success"
+        assert step_result.details["affected_instances"] == 10
+
+        # Verify SQL uses 'i' alias consistently
+        executed_sql = mock_session.execute.call_args[0][0]
+        assert "FROM dicom_instances i" in executed_sql
+        assert "i.current_canonical_observation_id" in executed_sql
+        assert "JOIN dicom_series s ON s.id = i.series_id" in executed_sql
+
+    @pytest.mark.asyncio
+    async def test_analyze_step_with_scope_date_range(self):
+        """_step_analyze with scope=date_range should use correct SQL alias."""
+        mock_session = MagicMock()
+        from datetime import datetime, timedelta
+
+        count_result = MagicMock()
+        count_result.scalar.return_value = 30
+        mock_session.execute.return_value = count_result
+
+        workflow = ReindexWorkflow(session=mock_session)
+
+        from dicom_ingestion.services.reindex.reindex_workflow import StepResult
+        now = datetime.now()
+        job = ReindexJob(
+            name="Test",
+            description="",
+            created_by="admin",
+            scope="date_range",
+            scope_params={"from_date": now - timedelta(days=7), "to_date": now},
+            steps=["validate", "analyze"]
+        )
+        step_result = StepResult(step="analyze")
+
+        await workflow._step_analyze(job, False, step_result)
+
+        assert step_result.status == "success"
+        assert step_result.details["affected_instances"] == 30
+
+        # Verify SQL uses 'i' alias consistently
+        executed_sql = mock_session.execute.call_args[0][0]
+        assert "FROM dicom_instances i" in executed_sql
+        assert "i.current_canonical_observation_id" in executed_sql
+        assert "JOIN dicom_instance_observations o ON o.id = i.current_canonical_observation_id" in executed_sql
+
 
 class TestJSONFieldCompatibility:
     """Tests for P1-2: JSON field deserialization compatibility."""

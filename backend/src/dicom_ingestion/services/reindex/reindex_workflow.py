@@ -660,10 +660,10 @@ class ReindexWorkflow:
         """Analyze scope and estimate impact."""
         # Count affected instances
         count_sql = self._build_scope_query(
-            "SELECT COUNT(*) FROM dicom_instances",
+            "SELECT COUNT(*) FROM dicom_instances i",
             job.scope,
             job.scope_params,
-            "current_canonical_observation_id IS NOT NULL"
+            "i.current_canonical_observation_id IS NOT NULL"
         )
         result_count = self._session.execute(count_sql, job.scope_params)
         instance_count = result_count.scalar() or 0
