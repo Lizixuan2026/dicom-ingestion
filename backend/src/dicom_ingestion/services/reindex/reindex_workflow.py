@@ -285,7 +285,7 @@ class ReindexWorkflow:
 
             # Count affected instances
             instance_count_sql = self._build_scope_query(
-                "SELECT COUNT(*) FROM dicom_instances",
+                "SELECT COUNT(*) FROM dicom_instances i",
                 job.scope,
                 job.scope_params,
                 "i.current_canonical_observation_id IS NOT NULL"
@@ -564,6 +564,19 @@ class ReindexWorkflow:
         if not row:
             return None
 
+        # Handle JSON fields with type compatibility (str -> loads, dict/list -> use directly)
+        scope_params = row[6]
+        if isinstance(scope_params, str):
+            scope_params = json.loads(scope_params) if scope_params else {}
+        elif scope_params is None:
+            scope_params = {}
+
+        steps = row[7]
+        if isinstance(steps, str):
+            steps = json.loads(steps) if steps else []
+        elif steps is None:
+            steps = []
+
         return ReindexJob(
             id=row[0],
             name=row[1] or "",
@@ -571,8 +584,8 @@ class ReindexWorkflow:
             created_by=row[3] or "",
             status=row[4] or ReindexStatus.PENDING.value,
             scope=row[5] or "all",
-            scope_params=json.loads(row[6]) if row[6] else {},
-            steps=json.loads(row[7]) if row[7] else [],
+            scope_params=scope_params,
+            steps=steps,
             batch_size=row[8] or 100,
             dry_run=row[9] or False,
             created_at=row[10],
