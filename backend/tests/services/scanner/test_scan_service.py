@@ -281,6 +281,42 @@ class TestScanServiceZipSafety:
 
         assert has_nesting_error or has_rejected_nested or manifest.rejected_count > 0
 
+    def test_nested_zip_at_depth_limit_plus_one_is_rejected_unsafe(self, scan_service):
+        """Nested ZIP at max_depth + 1 should be rejected as unsafe, not non-DICOM."""
+        max_depth = 2
+
+        deepest = BytesIO()
+        with zipfile.ZipFile(deepest, 'w') as zf:
+            zf.writestr("leaf.txt", b"deep content")
+        nested_content = deepest.getvalue()
+
+        for i in range(max_depth + 1):
+            outer = BytesIO()
+            with zipfile.ZipFile(outer, 'w') as zf:
+                zf.writestr(f"nested_{i}.zip", nested_content)
+            nested_content = outer.getvalue()
+
+        package = MockUploadPackage(
+            _bytes=nested_content,
+            original_filename="depth_plus_one.zip"
+        )
+
+        manifest = scan_service.scan(package, max_recursion_depth=max_depth)
+
+        rejected_depth_items = [
+            item for item in manifest.items
+            if item.scan_status == ScanStatus.REJECTED_UNSAFE
+            and "exceeds maximum" in item.error_reason
+            and item.nested_depth == max_depth + 1
+        ]
+        assert rejected_depth_items, "Expected a REJECTED_UNSAFE item for nested ZIP depth overflow"
+
+        assert any(
+            "exceeds maximum" in err and "Nested ZIP" in err
+            for err in manifest.scan_errors
+        )
+        assert all(item.scan_status != ScanStatus.REJECTED_NON_DICOM for item in rejected_depth_items)
+
     def test_detects_entry_count_limit(self, scan_service):
         """Scanner should detect too many entries."""
         # Create ZIP with many entries
