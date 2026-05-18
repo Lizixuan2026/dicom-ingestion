@@ -1,5 +1,18 @@
-"""Deployment validation checks."""
+"""Deployment validation checks.
 
+CLI Usage:
+    python -m dicom_ingestion.ops.deployment_checks [--json]
+
+Exit Codes:
+    0 - All checks passed
+    1 - One or more checks failed
+    2 - Internal error
+"""
+
+import argparse
+import json
+import os
+import sys
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
@@ -11,6 +24,14 @@ class CheckResult:
     valid: bool
     message: str
     details: Optional[dict] = None
+    
+    def to_dict(self) -> dict:
+        return {
+            "check_name": self.check_name,
+            "valid": self.valid,
+            "message": self.message,
+            "details": self.details
+        }
 
 
 class MigrationCheck:
@@ -114,3 +135,76 @@ class DeploymentValidator:
         """Check if all validations pass."""
         results = self.validate()
         return all(r.valid for r in results)
+
+
+def main() -> int:
+    """CLI entry point for deployment checks.
+    
+    Returns:
+        Exit code: 0 for success, 1 for check failure, 2 for internal error
+    """
+    parser = argparse.ArgumentParser(
+        description="Deployment validation checks for DICOM ingestion"
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON"
+    )
+    parser.add_argument(
+        "--check-config",
+        action="store_true",
+        help="Check configuration variables"
+    )
+    
+    args = parser.parse_args()
+    
+    try:
+        validator = DeploymentValidator()
+        
+        # Add configuration check if requested
+        if args.check_config:
+            def get_env_config(key: str) -> Optional[str]:
+                return os.environ.get(key)
+            
+            config_check = ConfigurationCheck(get_env_config)
+            validator.add_check(lambda: config_check.validate())
+        
+        # Always add a basic health check
+        def basic_check():
+            return CheckResult(
+                check_name="deployment",
+                valid=True,
+                message="Deployment validator is operational"
+            )
+        validator.add_check(basic_check)
+        
+        results = validator.validate()
+        is_valid = all(r.valid for r in results)
+        
+        if args.json:
+            output = {
+                "valid": is_valid,
+                "checks": [r.to_dict() for r in results]
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            print("Deployment Validation Results")
+            print(f"Overall: {'PASSED' if is_valid else 'FAILED'}")
+            print()
+            for result in results:
+                status = "✓" if result.valid else "✗"
+                print(f"  {status} {result.check_name}: {result.message}")
+        
+        return 0 if is_valid else 1
+        
+    except Exception as e:
+        if args.json:
+            print(json.dumps({"error": str(e), "exit_code": 2}))
+        else:
+            print(f"Internal error: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

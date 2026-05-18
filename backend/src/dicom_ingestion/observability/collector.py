@@ -26,6 +26,10 @@ class PipelineMetricsCollector:
     - Stage durations
     - Error codes for failures
     - Active/stuck items
+    - Replay operations
+    - Conflict resolution
+    - Indexing lag
+    - Recovery metrics
     """
 
     def __init__(self, registry: MetricsRegistry):
@@ -75,6 +79,38 @@ class PipelineMetricsCollector:
         )
         self.registry.register(self.jobs_counter)
 
+        # Counter for replay operations (dashboard panel: Replay Operations)
+        self.replay_counter = Counter(
+            "dicom_ingestion_replay_total",
+            "Total replay operations",
+            labels=["status"]  # success, failed
+        )
+        self.registry.register(self.replay_counter)
+
+        # Counter for conflict resolution (dashboard panel: Conflict Resolution Status)
+        self.conflict_counter = Counter(
+            "dicom_ingestion_conflict_total",
+            "Total binding policy conflicts",
+            labels=["resolution_status"]  # auto_resolved, manual_intervention, pending
+        )
+        self.registry.register(self.conflict_counter)
+
+        # Histogram for indexing lag (dashboard panel: Indexing Lag)
+        self.index_lag_histogram = Histogram(
+            "dicom_ingestion_index_lag_seconds",
+            "Time lag between data persistence and search indexing",
+            buckets=[1, 5, 10, 30, 60, 120, 300, 600]
+        )
+        self.registry.register(self.index_lag_histogram)
+
+        # Histogram for recovery duration (dashboard panel: Recovery Time)
+        self.recovery_histogram = Histogram(
+            "dicom_ingestion_recovery_duration_ms",
+            "Duration of replay-based recovery operations",
+            buckets=[100, 500, 1000, 2500, 5000, 10000, 30000, 60000]
+        )
+        self.registry.register(self.recovery_histogram)
+
     def record_job_started(self, job_id: str) -> None:
         """Record that a job started."""
         self.jobs_counter.inc(labels={"status": "started"})
@@ -112,6 +148,44 @@ class PipelineMetricsCollector:
     def record_item_stuck(self, item_id: str, stage: PipelineStage, age_minutes: int) -> None:
         """Record that an item is stuck in a stage."""
         self.stuck_counter.inc(labels={"stage": stage.value})
+
+    def record_replay(self, success: bool) -> None:
+        """Record a replay operation.
+        
+        Used by dashboard: Replay Operations panel
+        """
+        status = "success" if success else "failed"
+        self.replay_counter.inc(labels={"status": status})
+
+    def record_conflict_resolution(self, resolution_status: str) -> None:
+        """Record a conflict resolution event.
+        
+        Args:
+            resolution_status: One of "auto_resolved", "manual_intervention", "pending"
+        
+        Used by dashboard: Conflict Resolution Status panel
+        """
+        self.conflict_counter.inc(labels={"resolution_status": resolution_status})
+
+    def record_index_lag(self, lag_seconds: float) -> None:
+        """Record indexing lag.
+        
+        Args:
+            lag_seconds: Time between data persistence and indexing
+        
+        Used by dashboard: Indexing Lag panel
+        """
+        self.index_lag_histogram.observe(lag_seconds)
+
+    def record_recovery(self, duration_ms: float) -> None:
+        """Record a recovery operation duration.
+        
+        Args:
+            duration_ms: Duration of recovery operation in milliseconds
+        
+        Used by dashboard: Recovery Time (MTTR) panel
+        """
+        self.recovery_histogram.observe(duration_ms)
 
     def get_metrics_output(self) -> str:
         """Get all metrics in Prometheus format."""

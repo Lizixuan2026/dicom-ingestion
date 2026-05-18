@@ -78,7 +78,7 @@
             "legendFormat": "{{error_code}}"
           }
         ],
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16}
       },
       {
         "id": 6,
@@ -94,7 +94,7 @@
             "legendFormat": "failed"
           }
         ],
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16}
       },
       {
         "id": 7,
@@ -106,7 +106,93 @@
             "format": "table"
           }
         ],
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 24}
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16}
+      },
+      {
+        "id": 8,
+        "title": "Replay Operations",
+        "type": "timeseries",
+        "description": "Track replay operations for failure recovery",
+        "targets": [
+          {
+            "expr": "rate(dicom_ingestion_replay_total{status=\"success\"}[5m])",
+            "legendFormat": "replay_success"
+          },
+          {
+            "expr": "rate(dicom_ingestion_replay_total{status=\"failed\"}[5m])",
+            "legendFormat": "replay_failed"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+      },
+      {
+        "id": 9,
+        "title": "Conflict Resolution Status",
+        "type": "stat",
+        "description": "Binding policy conflicts requiring manual intervention",
+        "targets": [
+          {
+            "expr": "dicom_ingestion_conflict_total",
+            "legendFormat": "{{resolution_status}}"
+          }
+        ],
+        "alert": {
+          "name": "Unresolved Conflicts Alert",
+          "condition": {
+            "evaluator": {"params": [0], "type": "gt"},
+            "reducer": {"type": "last"},
+            "query": {"params": ["A", "5m", "now"]}
+          },
+          "executionErrorState": "alerting",
+          "frequency": "5m",
+          "handler": 1,
+          "noDataState": "no_data",
+          "notifications": [{"uid": "dicom_ingestion_alerts"}]
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+      },
+      {
+        "id": 10,
+        "title": "Indexing Lag",
+        "type": "timeseries",
+        "description": "Time lag between data persistence and search indexing",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, dicom_ingestion_index_lag_seconds_bucket)",
+            "legendFormat": "p99_index_lag"
+          },
+          {
+            "expr": "histogram_quantile(0.95, dicom_ingestion_index_lag_seconds_bucket)",
+            "legendFormat": "p95_index_lag"
+          }
+        ],
+        "alert": {
+          "name": "High Indexing Lag Alert",
+          "condition": {
+            "evaluator": {"params": [60], "type": "gt"},
+            "reducer": {"type": "last"},
+            "query": {"params": ["A", "5m", "now"]}
+          },
+          "executionErrorState": "alerting",
+          "frequency": "1m",
+          "handler": 1,
+          "noDataState": "no_data",
+          "notifications": [{"uid": "dicom_ingestion_alerts"}]
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32}
+      },
+      {
+        "id": 11,
+        "title": "Recovery Time (MTTR)",
+        "type": "stat",
+        "description": "Mean time to recovery for failed items via replay",
+        "targets": [
+          {
+            "expr": "avg(dicom_ingestion_recovery_duration_ms)",
+            "legendFormat": "avg_recovery_time"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32}
       }
     ]
   }
