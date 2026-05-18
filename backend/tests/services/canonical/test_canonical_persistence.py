@@ -321,6 +321,51 @@ class TestCanonicalPersistenceService:
         assert result.error_code == "MetadataPersistenceFailed"
         assert "Database connection failed" in result.error_detail
 
+    @pytest.mark.asyncio
+    async def test_validate_canonical_fails_when_canonical_missing(
+        self,
+        persistence_service: CanonicalPersistenceService,
+        mock_session: MagicMock,
+    ):
+        """Canonical invariant: current canonical observation must exist."""
+        result = MagicMock()
+        result.fetchone = MagicMock(return_value=(None, None, None))
+        mock_session.execute = MagicMock(return_value=result)
+
+        is_valid = await persistence_service.validate_canonical(instance_id=10)
+
+        assert is_valid is False
+
+    @pytest.mark.asyncio
+    async def test_validate_canonical_fails_when_canonical_not_marked(
+        self,
+        persistence_service: CanonicalPersistenceService,
+        mock_session: MagicMock,
+    ):
+        """Canonical invariant: current canonical observation must be marked."""
+        result = MagicMock()
+        result.fetchone = MagicMock(return_value=(99, False, 10))
+        mock_session.execute = MagicMock(return_value=result)
+
+        is_valid = await persistence_service.validate_canonical(instance_id=10)
+
+        assert is_valid is False
+
+    @pytest.mark.asyncio
+    async def test_validate_canonical_fails_when_canonical_belongs_to_other_instance(
+        self,
+        persistence_service: CanonicalPersistenceService,
+        mock_session: MagicMock,
+    ):
+        """Canonical invariant: current canonical observation must belong to instance."""
+        result = MagicMock()
+        result.fetchone = MagicMock(return_value=(99, True, 77))
+        mock_session.execute = MagicMock(return_value=result)
+
+        is_valid = await persistence_service.validate_canonical(instance_id=10)
+
+        assert is_valid is False
+
 
 class TestPersistenceResult:
     """Test suite for PersistenceResult dataclass."""

@@ -551,7 +551,7 @@ class CanonicalPersistenceService:
         """
         result = self._session.execute(
             """
-            SELECT i.current_canonical_observation_id, o.is_canonical
+            SELECT i.current_canonical_observation_id, o.is_canonical, o.instance_id
             FROM dicom_instances i
             LEFT JOIN dicom_instance_observations o ON o.id = i.current_canonical_observation_id
             WHERE i.id = :instance_id
@@ -564,7 +564,7 @@ class CanonicalPersistenceService:
             self._logger.error("Instance %s not found", instance_id)
             return False
 
-        canonical_obs_id, is_canonical = row
+        canonical_obs_id, is_canonical, observation_instance_id = row
 
         if canonical_obs_id is None:
             self._logger.error("Instance %s has no canonical observation", instance_id)
@@ -574,6 +574,13 @@ class CanonicalPersistenceService:
             self._logger.error(
                 "Instance %s canonical observation %s is not marked is_canonical",
                 instance_id, canonical_obs_id
+            )
+            return False
+
+        if observation_instance_id != instance_id:
+            self._logger.error(
+                "Instance %s canonical observation %s belongs to instance %s",
+                instance_id, canonical_obs_id, observation_instance_id
             )
             return False
 
