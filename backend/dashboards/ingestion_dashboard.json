@@ -1,0 +1,113 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "DICOM Ingestion - Production Overview",
+    "tags": ["dicom", "ingestion", "production"],
+    "timezone": "UTC",
+    "schemaVersion": 36,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Ingestion Rate (items/min)",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(dicom_ingestion_items_total[5m]) * 60",
+            "legendFormat": "{{stage}} - {{status}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Error Rate by Stage",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(dicom_ingestion_items_total{status=\"failed\"}[5m])",
+            "legendFormat": "{{stage}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Stage Duration (p99)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, rate(dicom_ingestion_stage_duration_ms_bucket[5m]))",
+            "legendFormat": "{{stage}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Stuck Items",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "dicom_ingestion_items_stuck_total",
+            "legendFormat": "{{stage}}"
+          }
+        ],
+        "alert": {
+          "name": "Stuck Items Alert",
+          "condition": {
+            "evaluator": {"params": [0], "type": "gt"},
+            "reducer": {"type": "last"},
+            "query": {"params": ["A", "5m", "now"]}
+          },
+          "executionErrorState": "alerting",
+          "frequency": "1m",
+          "handler": 1,
+          "noDataState": "no_data",
+          "notifications": [{"uid": "dicom_ingestion_alerts"}]
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "Error Breakdown by Type",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "dicom_ingestion_errors_total",
+            "legendFormat": "{{error_code}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Job Completion Rate",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(dicom_ingestion_jobs_total{status=\"completed\"}[5m])",
+            "legendFormat": "completed"
+          },
+          {
+            "expr": "rate(dicom_ingestion_jobs_total{status=\"failed\"}[5m])",
+            "legendFormat": "failed"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 7,
+        "title": "Service Health",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "up{job=\"dicom-ingestion\"}",
+            "format": "table"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 24}
+      }
+    ]
+  }
+}
