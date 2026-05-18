@@ -300,6 +300,65 @@ class TestCanonicalPersistenceService:
         assert "Database connection failed" in result.error_detail
 
 
+    def test_safe_json_dumps_handles_bytes_and_datetime(
+        self,
+        persistence_service: CanonicalPersistenceService,
+    ):
+        """Bytes/datetime tags should serialize via fallback without raising."""
+        payload = {
+            "binary": b"\xff\x00",
+            "observed_at": datetime(2024, 1, 2, 3, 4, 5),
+        }
+
+        dumped = persistence_service._safe_json_dumps(payload, item_id=123)
+
+        assert dumped is not None
+        assert "\\ufffd\\u0000" in dumped
+        assert "2024-01-02T03:04:05" in dumped
+
+    @pytest.mark.asyncio
+    async def test_persist_does_not_fail_when_raw_tags_need_fallback_serialization(
+        self,
+        persistence_service: CanonicalPersistenceService,
+        sample_ingestion_item: IngestionItem,
+        sample_parsed_header: ParsedDicomHeader,
+        mock_session: MagicMock,
+    ):
+        """raw_tags with bytes/datetime should not fail metadata persistence."""
+        sample_parsed_header.raw_tags = {
+            **sample_parsed_header.required_tags,
+            "BinaryTag": b"\xff\x00",
+            "AcquisitionDateTime": datetime(2024, 1, 2, 3, 4, 5),
+        }
+
+        call_count = [0]
+        inserted_params = {}
+
+        def mock_execute(query, params=None):
+            result = MagicMock()
+            query_str = str(query) if isinstance(query, str) else str(query.text if hasattr(query, 'text') else query)
+
+            if "SELECT" in query_str.upper() and "FROM" in query_str.upper():
+                result.fetchone = MagicMock(return_value=None)
+            else:
+                call_count[0] += 1
+                if "INSERT INTO DICOM_INSTANCE_OBSERVATIONS" in query_str.upper():
+                    inserted_params.update(params or {})
+                result.fetchone = MagicMock(return_value=(call_count[0],))
+
+            return result
+
+        mock_session.execute = mock_execute
+
+        result = await persistence_service.persist(sample_ingestion_item, sample_parsed_header)
+
+        assert result.success is True
+        assert result.error_code == ""
+        assert inserted_params["raw_tag_set_json"] is not None
+        assert "2024-01-02T03:04:05" in inserted_params["raw_tag_set_json"]
+
+
+
 class TestPersistenceResult:
     """Test suite for PersistenceResult dataclass."""
 
