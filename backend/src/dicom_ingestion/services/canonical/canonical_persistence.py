@@ -11,7 +11,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Dict, List
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -32,6 +32,11 @@ class PersistenceResult:
         instance_id: ID of the instance record (if created/found)
         observation_id: ID of the observation record (if created)
         is_new_canonical: True if this observation became the canonical one
+        canonical_policy_rationale: Reason for canonical pointer selection
+        duplicate_check_result: Result of duplicate detection (C1)
+        private_tag_result: Result of private tag persistence (C2)
+        reference_extraction_result: Result of reference edge extraction (C3)
+        binding_policy_result: Result of binding policy creation (C4)
         error_code: Error code if persistence failed
         error_detail: Detailed error message if failed
     """
@@ -41,6 +46,11 @@ class PersistenceResult:
     instance_id: Optional[int] = None
     observation_id: Optional[int] = None
     is_new_canonical: bool = False
+    canonical_policy_rationale: str = ""
+    duplicate_check_result: Optional[Dict[str, Any]] = None
+    private_tag_result: Optional[Dict[str, Any]] = None
+    reference_extraction_result: Optional[Dict[str, Any]] = None
+    binding_policy_result: Optional[Dict[str, Any]] = None
     error_code: str = ""
     error_detail: str = ""
 
@@ -81,28 +91,89 @@ class CanonicalPersistenceService:
     - Parse DICOM envelope safely
     - Persist canonical study/series/instance-level facts
     - Create observations with proper canonical marking
+    - Detect and record duplicate facts (C1)
+    - Persist private tags with redaction policy (C2)
+    - Extract and store reference edges (C3)
+    - Create binding policy records (C4)
     - Preserve parse provenance and deterministic failure envelopes
 
     Canonical Observation Policy:
     - First accepted observation becomes canonical
     - Later observations do not silently replace it
     - Each instance has exactly one current canonical observation
+    - Policy rationale is recorded for auditability
     """
 
     def __init__(
         self,
         session: Session,
         raw_object_store: Any,
+        enable_duplicate_detection: bool = True,
+        enable_private_tag_persistence: bool = True,
+        enable_reference_extraction: bool = True,
+        enable_binding_policy: bool = True,
     ) -> None:
         """Initialize the canonical persistence service.
 
         Args:
             session: SQLAlchemy session for database operations
             raw_object_store: RawObjectStore for retrieving raw bytes
+            enable_duplicate_detection: Whether to enable C1 duplicate detection
+            enable_private_tag_persistence: Whether to enable C2 private tag persistence
+            enable_reference_extraction: Whether to enable C3 reference edge extraction
+            enable_binding_policy: Whether to enable C4 binding policy creation
         """
         self._session = session
         self._raw_store = raw_object_store
         self._logger = logger
+
+        # Batch 4 feature flags
+        self._enable_duplicate_detection = enable_duplicate_detection
+        self._enable_private_tag_persistence = enable_private_tag_persistence
+        self._enable_reference_extraction = enable_reference_extraction
+        self._enable_binding_policy = enable_binding_policy
+
+        # Lazy-initialized Batch 4 services
+        self._duplicate_service: Optional[Any] = None
+        self._private_tag_service: Optional[Any] = None
+        self._reference_service: Optional[Any] = None
+        self._binding_service: Optional[Any] = None
+
+    def _get_duplicate_service(self) -> Any:
+        """Lazy initialization of duplicate detection service."""
+        if self._duplicate_service is None and self._enable_duplicate_detection:
+            from dicom_ingestion.services.detection.duplicate_detection import (
+                DuplicateDetectionService
+            )
+            self._duplicate_service = DuplicateDetectionService(self._session)
+        return self._duplicate_service
+
+    def _get_private_tag_service(self) -> Any:
+        """Lazy initialization of private tag persistence service."""
+        if self._private_tag_service is None and self._enable_private_tag_persistence:
+            from dicom_ingestion.services.persistence.private_tag_persistence import (
+                PrivateTagPersistenceService
+            )
+            self._private_tag_service = PrivateTagPersistenceService(self._session)
+        return self._private_tag_service
+
+    def _get_reference_service(self) -> Any:
+        """Lazy initialization of reference extraction service."""
+        if self._reference_service is None and self._enable_reference_extraction:
+            from dicom_ingestion.services.classifier.reference_extraction import (
+                ReferenceExtractionService
+            )
+            self._reference_service = ReferenceExtractionService(self._session)
+        return self._reference_service
+
+    def _get_binding_service(self) -> Any:
+        """Lazy initialization of binding policy service."""
+        if self._binding_service is None and self._enable_binding_policy:
+            from dicom_ingestion.services.binding.binding_policy import (
+                BindingPolicyService
+            )
+            self._binding_service = BindingPolicyService(self._session)
+        return self._binding_service
 
     async def persist(
         self,
@@ -118,6 +189,10 @@ class CanonicalPersistenceService:
         4. Get or create instance record
         5. Create observation record
         6. Mark as canonical if first observation for this instance
+        7. C1: Detect and record duplicate facts
+        8. C2: Persist private tags with redaction policy
+        9. C3: Extract and store reference edges
+        10. C4: Create binding policy record
 
         Args:
             item: The ingestion item to persist
@@ -160,6 +235,36 @@ class CanonicalPersistenceService:
             # Try to mark as canonical if no canonical currently exists
             result.is_new_canonical = await self._mark_canonical(instance_id, observation_id)
 
+            # Record canonical policy rationale
+            if result.is_new_canonical:
+                result.canonical_policy_rationale = "first_observation_becomes_canonical"
+            else:
+                result.canonical_policy_rationale = "canonical_already_exists"
+
+            # C1: Duplicate detection
+            if self._enable_duplicate_detection:
+                await self._execute_duplicate_detection(
+                    result, instance_id, observation_id, item, parsed_header
+                )
+
+            # C2: Private tag persistence
+            if self._enable_private_tag_persistence:
+                await self._execute_private_tag_persistence(
+                    result, observation_id, parsed_header
+                )
+
+            # C3: Reference edge extraction
+            if self._enable_reference_extraction:
+                await self._execute_reference_extraction(
+                    result, instance_id, observation_id, parsed_header
+                )
+
+            # C4: Binding policy creation
+            if self._enable_binding_policy:
+                await self._execute_binding_policy(
+                    result, instance_id, observation_id
+                )
+
             result.success = True
             self._logger.info(
                 "Successfully persisted item %s: study=%s, series=%s, instance=%s, observation=%s",
@@ -172,6 +277,164 @@ class CanonicalPersistenceService:
             result.error_detail = str(e)
 
         return result
+
+    async def _execute_duplicate_detection(
+        self,
+        result: PersistenceResult,
+        instance_id: int,
+        observation_id: int,
+        item: IngestionItem,
+        parsed_header: Any,
+    ) -> None:
+        """Execute C1 duplicate detection.
+
+        Args:
+            result: Persistence result to populate
+            instance_id: The instance ID
+            observation_id: The observation ID
+            item: The ingestion item
+            parsed_header: The parsed DICOM header
+        """
+        try:
+            from dicom_ingestion.services.detection.duplicate_detection import (
+                DuplicateDetectionContext
+            )
+
+            dup_service = self._get_duplicate_service()
+            if dup_service is None:
+                return
+
+            ctx = DuplicateDetectionContext(
+                observation_id=observation_id,
+                instance_id=instance_id,
+                sop_instance_uid=parsed_header.required_tags.get("SOPInstanceUID", ""),
+                whole_file_sha256=item.raw_object_sha256,
+                pixel_digest=None,  # Would need pixel extraction
+                ingestion_item_id=item.id,
+            )
+
+            dup_result = await dup_service.check_and_record_duplicates(ctx)
+            result.duplicate_check_result = dup_result.to_dict()
+
+            self._logger.debug(
+                "Duplicate check for observation %s: has_duplicates=%s",
+                observation_id, dup_result.has_duplicates
+            )
+
+        except Exception as e:
+            self._logger.warning("Duplicate detection failed: %s", e)
+            result.duplicate_check_result = {"error": str(e)}
+
+    async def _execute_private_tag_persistence(
+        self,
+        result: PersistenceResult,
+        observation_id: int,
+        parsed_header: Any,
+    ) -> None:
+        """Execute C2 private tag persistence.
+
+        Args:
+            result: Persistence result to populate
+            observation_id: The observation ID
+            parsed_header: The parsed DICOM header
+        """
+        try:
+            pt_service = self._get_private_tag_service()
+            if pt_service is None:
+                return
+
+            pt_result = await pt_service.persist_private_tags(
+                observation_id=observation_id,
+                private_tags=parsed_header.private_tags,
+            )
+            result.private_tag_result = pt_result.to_dict()
+
+            self._logger.debug(
+                "Private tag persistence for observation %s: persisted=%d, redacted=%d",
+                observation_id, pt_result.persisted_count, pt_result.redacted_count
+            )
+
+        except Exception as e:
+            self._logger.warning("Private tag persistence failed: %s", e)
+            result.private_tag_result = {"error": str(e)}
+
+    async def _execute_reference_extraction(
+        self,
+        result: PersistenceResult,
+        instance_id: int,
+        observation_id: int,
+        parsed_header: Any,
+    ) -> None:
+        """Execute C3 reference edge extraction.
+
+        Args:
+            result: Persistence result to populate
+            instance_id: The instance ID
+            observation_id: The observation ID (for logging)
+            parsed_header: The parsed DICOM header
+        """
+        try:
+            ref_service = self._get_reference_service()
+            if ref_service is None:
+                return
+
+            ref_result = await ref_service.extract_and_persist(
+                from_instance_id=instance_id,
+                raw_tags=parsed_header.raw_tags,
+                resolve_immediately=True,
+            )
+            result.reference_extraction_result = ref_result.to_dict()
+
+            self._logger.debug(
+                "Reference extraction for instance %s: extracted=%d, resolved=%d",
+                instance_id, ref_result.extracted_count, ref_result.resolved_count
+            )
+
+        except Exception as e:
+            self._logger.warning("Reference extraction failed: %s", e)
+            result.reference_extraction_result = {"error": str(e)}
+
+    async def _execute_binding_policy(
+        self,
+        result: PersistenceResult,
+        instance_id: int,
+        observation_id: int,
+    ) -> None:
+        """Execute C4 binding policy creation.
+
+        Args:
+            result: Persistence result to populate
+            instance_id: The instance ID
+            observation_id: The observation ID
+        """
+        try:
+            from dicom_ingestion.models.binding_policy import BindingContext
+
+            bind_service = self._get_binding_service()
+            if bind_service is None:
+                return
+
+            # Create binding record (binding execution happens separately)
+            ctx = BindingContext(
+                project_id="",  # To be filled by caller
+                user_id="",     # To be filled by caller
+            )
+
+            bind_result = await bind_service.create_binding_record(
+                instance_id=instance_id,
+                observation_id=observation_id,
+                context=ctx,
+            )
+            result.binding_policy_result = bind_result.to_dict()
+
+            self._logger.debug(
+                "Binding policy created for instance %s: binding_id=%s",
+                instance_id, bind_result.binding_id
+            )
+
+        except Exception as e:
+            self._logger.warning("Binding policy creation failed: %s", e)
+            result.binding_policy_result = {"error": str(e)}
 
     def _extract_required_tags(self, parsed_header: ParsedDicomHeader) -> dict[str, Any]:
         """Extract required tags from parsed header.
