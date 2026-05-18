@@ -33,10 +33,9 @@ class TestTagValidatorCreation:
         assert validator.required_tags == custom_tags
 
     def test_validator_strict_mode(self):
-        """Strict mode should add recommended tags."""
+        """Strict mode should not mutate required tag list."""
         validator = TagValidator(strict=True)
-        assert "PatientID" in validator.required_tags
-        assert "PatientName" in validator.required_tags
+        assert validator.required_tags == TagValidator.REQUIRED_TAGS
 
 
 class TestTagValidatorValidate:
@@ -90,8 +89,8 @@ class TestTagValidatorValidate:
 
         assert result == ValidationResult.INVALID
 
-    def test_invalid_when_strict_required_missing(self):
-        """In strict mode, should return INVALID when required tags missing."""
+    def test_incomplete_when_strict_recommended_missing(self):
+        """In strict mode, missing recommended tags should be INCOMPLETE."""
         validator = TagValidator(strict=True)
         header = ParsedDicomHeader(
             required_tags={
@@ -99,14 +98,45 @@ class TestTagValidatorValidate:
                 "SOPInstanceUID": "1.2.4",
                 "StudyInstanceUID": "1.2.5",
                 "SeriesInstanceUID": "1.2.6",
-                # Missing PatientID (now required in strict mode)
+                # Missing recommended tags
             }
         )
 
         result = validator.validate(header)
 
-        # In strict mode, PatientID is required, so should be INVALID
+        assert result == ValidationResult.INCOMPLETE
+
+    def test_invalid_when_strict_required_missing(self):
+        """In strict mode, missing required tags should still be INVALID."""
+        validator = TagValidator(strict=True)
+        header = ParsedDicomHeader(
+            required_tags={
+                "SOPClassUID": "1.2.3",
+                # Missing SOPInstanceUID
+                "StudyInstanceUID": "1.2.5",
+                "SeriesInstanceUID": "1.2.6",
+            }
+        )
+
+        result = validator.validate(header)
+
         assert result == ValidationResult.INVALID
+
+    def test_valid_when_non_strict_recommended_missing(self):
+        """In non-strict mode, missing recommended tags should still be VALID."""
+        validator = TagValidator(strict=False)
+        header = ParsedDicomHeader(
+            required_tags={
+                "SOPClassUID": "1.2.3",
+                "SOPInstanceUID": "1.2.4",
+                "StudyInstanceUID": "1.2.5",
+                "SeriesInstanceUID": "1.2.6",
+            }
+        )
+
+        result = validator.validate(header)
+
+        assert result == ValidationResult.VALID
 
 
 class TestTagValidatorValidateWithReport:
@@ -161,6 +191,41 @@ class TestTagValidatorValidateWithReport:
 
         assert len(report.warnings) > 0
         assert any("PatientID" in w for w in report.warnings)
+
+    def test_strict_report_recommended_missing_is_warning_not_missing(self):
+        """Strict mode should treat recommended missing tags as warnings."""
+        validator = TagValidator(strict=True)
+        header = ParsedDicomHeader(
+            required_tags={
+                "SOPClassUID": "1.2.3",
+                "SOPInstanceUID": "1.2.4",
+                "StudyInstanceUID": "1.2.5",
+                "SeriesInstanceUID": "1.2.6",
+            }
+        )
+
+        report = validator.validate_with_report(header)
+
+        assert report.result == ValidationResult.INCOMPLETE
+        assert "PatientID" not in report.missing_tags
+        assert any("PatientID" in w for w in report.warnings)
+
+    def test_non_strict_report_recommended_missing_can_be_valid(self):
+        """Non-strict mode can be VALID even with recommended warnings."""
+        validator = TagValidator(strict=False)
+        header = ParsedDicomHeader(
+            required_tags={
+                "SOPClassUID": "1.2.3",
+                "SOPInstanceUID": "1.2.4",
+                "StudyInstanceUID": "1.2.5",
+                "SeriesInstanceUID": "1.2.6",
+            }
+        )
+
+        report = validator.validate_with_report(header)
+
+        assert report.result == ValidationResult.VALID
+        assert len(report.warnings) > 0
 
     def test_valid_report_has_no_issues(self):
         """Valid header should have empty issue lists."""

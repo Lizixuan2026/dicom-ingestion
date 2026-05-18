@@ -84,11 +84,9 @@ class TagValidator:
 
         Args:
             required_tags: List of required tag names. If None, uses default.
-            strict: If True, recommended tags are also required.
+            strict: If True, missing recommended tags downgrade result to INCOMPLETE.
         """
         self.required_tags = required_tags or self.REQUIRED_TAGS.copy()
-        if strict:
-            self.required_tags.extend(self.RECOMMENDED_TAGS)
         self.strict = strict
 
     def validate(self, parsed_header) -> ValidationResult:
