@@ -379,6 +379,42 @@ class TestBindingContextHandling:
         assert call_args[1]["context"].project_id == "proj-123"
         assert call_args[1]["context"].user_id == "user-456"
 
+    def test_binding_context_invalid_falls_back_to_system_default(self, caplog):
+        """Invalid binding context should log and fallback with invalid reason code."""
+        from unittest.mock import AsyncMock
+        import logging
+        import asyncio
+
+        mock_session = MagicMock()
+        mock_store = MagicMock()
+        service = CanonicalPersistenceService(mock_session, mock_store)
+        result = PersistenceResult()
+
+        mock_bind_service = MagicMock()
+        mock_bind_result = MagicMock()
+        mock_bind_result.binding_id = 102
+        mock_bind_result.to_dict.return_value = {"binding_id": 102}
+        mock_bind_service.create_binding_record = AsyncMock(return_value=mock_bind_result)
+        service._binding_service = mock_bind_service
+
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(service._execute_binding_policy(
+                result=result,
+                instance_id=1,
+                observation_id=2,
+                binding_context={"project_id": "bad-dict"},
+            ))
+
+        assert result.binding_policy_result["binding_id"] == 102
+        assert result.binding_policy_result["context_fallback"] == "system_default"
+        assert result.binding_policy_result["context_fallback_reason"] == "BINDING_CONTEXT_INVALID"
+        assert result.binding_policy_result["context_invalid_type"] == "dict"
+
+        call_args = mock_bind_service.create_binding_record.call_args
+        assert call_args[1]["context"].project_id == "system_default"
+        assert call_args[1]["context"].user_id == "system"
+        assert "Binding context invalid for instance 1: type=dict, using system default" in caplog.text
+
 
 class TestPixelDigestHandling:
     """Tests for C1 pixel digest handling (v0.2 P0 fix)."""
