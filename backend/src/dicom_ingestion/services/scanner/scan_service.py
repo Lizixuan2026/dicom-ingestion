@@ -141,6 +141,7 @@ class ScanService:
             ScanManifest with all discovered items and their statuses
         """
         manifest = ScanManifest()
+        top_level_rejected_count = 0
 
         try:
             # Get the raw bytes from the package
@@ -173,13 +174,13 @@ class ScanService:
 
         except ZipBombDetected as e:
             manifest.scan_errors.append(f"ZIP bomb detected: {e}")
-            manifest.rejected_count += 1
+            top_level_rejected_count += 1
         except UnsafeArchivePath as e:
             manifest.scan_errors.append(f"Unsafe archive path: {e}")
-            manifest.rejected_count += 1
+            top_level_rejected_count += 1
         except NestedZipTooDeep as e:
             manifest.scan_errors.append(f"ZIP nesting too deep: {e}")
-            manifest.rejected_count += 1
+            top_level_rejected_count += 1
         except Exception as e:
             manifest.scan_errors.append(f"Scan error: {e}")
 
@@ -187,7 +188,11 @@ class ScanService:
         manifest.total_items = len(manifest.items)
         manifest.dicom_count = sum(1 for item in manifest.items if item.is_dicom)
         manifest.non_dicom_count = sum(1 for item in manifest.items if not item.is_dicom and item.scan_status != ScanStatus.REJECTED_UNSAFE)
-        manifest.rejected_count = sum(1 for item in manifest.items if item.scan_status in [ScanStatus.REJECTED_UNSAFE, ScanStatus.REJECTED_NON_DICOM])
+        item_rejected_count = sum(
+            1 for item in manifest.items
+            if item.scan_status in [ScanStatus.REJECTED_UNSAFE, ScanStatus.REJECTED_NON_DICOM]
+        )
+        manifest.rejected_count = item_rejected_count + top_level_rejected_count
 
         return manifest
 
@@ -223,7 +228,9 @@ class ScanService:
                     "Failed to read upload package from object storage URI: %s",
                     upload_package.uri
                 )
-                return None
+                raise RuntimeError(
+                    f"PackageReadFailed for URI {upload_package.uri}: {exc}"
+                ) from exc
 
         if hasattr(upload_package, 'bytes'):
             return upload_package.bytes

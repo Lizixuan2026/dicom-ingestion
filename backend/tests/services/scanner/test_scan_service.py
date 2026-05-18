@@ -51,6 +51,13 @@ class MockObjectStore:
         return self._payload_by_uri[uri]
 
 
+class FailingObjectStore:
+    """Mock object store that fails reads."""
+
+    def get(self, uri):
+        raise OSError(f"cannot read {uri}")
+
+
 # Fixtures path
 FIXTURES_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'fixtures', 'dicom')
 
@@ -111,6 +118,21 @@ class TestScanServiceBasic:
         assert manifest.dicom_count == 1
         assert manifest.items[0].is_dicom is True
         assert manifest.scan_errors == []
+
+
+
+    def test_uri_read_failure_surfaces_structured_scan_error(self):
+        """URI read failures should be surfaced as PackageReadFailed scan errors."""
+        package = MockUploadPackage(
+            uri="s3://bucket/upload/missing.dcm",
+            original_filename="missing.dcm"
+        )
+        scan_service = ScanService(object_store=FailingObjectStore())
+
+        manifest = scan_service.scan(package)
+
+        assert manifest.total_items == 0
+        assert any("PackageReadFailed" in err for err in manifest.scan_errors)
 
     def test_rejects_non_dicom_file(self, scan_service):
         """Non-DICOM files should be marked rejected_non_dicom."""
@@ -364,6 +386,29 @@ class TestScanServiceZipSafety:
         assert any("entries" in err.lower() or "count" in err.lower()
                    for err in manifest.scan_errors) or manifest.rejected_count > 0
 
+
+
+
+    def test_top_level_zip_safety_failure_counts_as_rejected(self):
+        """Top-level ZIP safety failures should increment rejected_count."""
+        limits = ZipSafetyLimits(
+            max_total_bytes=1024,
+            max_entry_count=1000,
+            max_nesting_depth=3,
+            max_entry_bytes=10 * 1024 * 1024
+        )
+        strict_service = ScanService(safety_limits=limits)
+
+        large_content = b"x" * (2 * 1024)
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("too_large.bin", large_content)
+
+        package = MockUploadPackage(_bytes=zip_buffer.getvalue(), original_filename="too_large.zip")
+        manifest = strict_service.scan(package)
+
+        assert manifest.total_items == 0
+        assert manifest.rejected_count >= 1
 
 class TestScanServiceManifest:
     """ScanManifest behavior tests."""
