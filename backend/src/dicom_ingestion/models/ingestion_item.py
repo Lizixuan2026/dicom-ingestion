@@ -190,12 +190,8 @@ class IngestionItem:
 
     @property
     def is_dicom(self) -> bool:
-        """True if this item is identified as DICOM."""
-        # A DICOM item would have been scanned and not rejected for being non-DICOM
-        return self.status_axes.scan_status not in [
-            ItemStatusValue.REJECTED.value,
-            ItemStatusValue.FAILED.value
-        ] or self.terminal_outcome == TerminalOutcome.ACCEPTED.value
+        """True only when scan has completed and item is confirmed as DICOM."""
+        return self.status_axes.scan_status == ItemStatusValue.COMPLETED.value
 
     @property
     def is_terminal(self) -> bool:
