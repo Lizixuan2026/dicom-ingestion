@@ -20,6 +20,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _result_rows(result: Any) -> List[Any]:
+    """Return SQLAlchemy result rows, supporting both real results and test mocks."""
+    fetchall = getattr(result, "fetchall", None)
+    if callable(fetchall):
+        rows = fetchall()
+        if isinstance(rows, (list, tuple)):
+            return list(rows)
+    return list(result)
+
+
 @dataclass
 class ProjectionBuildResult:
     """Result of building a projection for a single instance.
@@ -262,7 +272,7 @@ class ProjectionService:
             """
             query_params = {**params, "limit": per_page, "offset": offset}
 
-            rows = self._session.execute(query_sql, query_params)
+            rows = _result_rows(self._session.execute(query_sql, query_params))
 
             for row in rows:
                 result.items.append({
@@ -354,7 +364,7 @@ class ProjectionService:
                 FROM dicom_core_projections
                 GROUP BY projection_version
             """
-            version_rows = self._session.execute(version_sql)
+            version_rows = _result_rows(self._session.execute(version_sql))
             versions = {row[0]: row[1] for row in version_rows}
 
             # Count instances without projections

@@ -293,8 +293,8 @@ class ReviewQueryService:
                     source_type,
                     status,
                     created_at,
-                    completed_at,
-                    EXTRACT(EPOCH FROM (completed_at - created_at)) as duration
+                    finished_at,
+                    EXTRACT(EPOCH FROM (finished_at - created_at)) as duration
                 FROM dicom_ingestion_jobs
                 WHERE id = :job_id
             """
@@ -383,13 +383,18 @@ class ReviewQueryService:
                     i.source_path,
                     i.byte_size,
                     i.item_fingerprint,
-                    i.status_axes,
+                    i.scan_status,
+                    i.parse_status,
+                    i.storage_status,
+                    i.metadata_persistence_status,
+                    i.validation_status,
+                    i.binding_status,
+                    i.index_status,
                     i.terminal_outcome,
                     i.error_code,
                     i.error_detail,
                     i.created_at,
-                    i.updated_at,
-                    i.completed_at
+                    i.updated_at
                 FROM dicom_ingestion_items i
                 WHERE i.id = :item_id
             """
@@ -399,17 +404,32 @@ class ReviewQueryService:
             if not item_row:
                 return None
 
+            # Reconstruct status_axes dict from the seven real status columns
+            status_axes = {
+                "scan_status": item_row[5] or "pending",
+                "parse_status": item_row[6] or "pending",
+                "storage_status": item_row[7] or "pending",
+                "metadata_persistence_status": item_row[8] or "pending",
+                "validation_status": item_row[9] or "pending",
+                "binding_status": item_row[10] or "pending",
+                "index_status": item_row[11] or "pending",
+            }
+            terminal_outcome = item_row[12]
+            updated_at = item_row[16]
+            # Derive completed_at: use updated_at when item has reached a terminal state
+            completed_at = updated_at if terminal_outcome else None
+
             view = ItemReviewView(
                 item_id=item_row[0],
                 job_id=item_row[1],
                 source_path=item_row[2] or "",
                 byte_size=item_row[3] or 0,
                 fingerprint=item_row[4] or "",
-                status_axes=item_row[5] or {},
-                terminal_outcome=item_row[6],
-                created_at=item_row[9],
-                updated_at=item_row[10],
-                completed_at=item_row[11],
+                status_axes=status_axes,
+                terminal_outcome=terminal_outcome,
+                created_at=item_row[15],
+                updated_at=updated_at,
+                completed_at=completed_at,
             )
 
             # Determine if complete and if has failures
@@ -422,8 +442,8 @@ class ReviewQueryService:
                 )
 
             # Build error summary
-            if item_row[7]:  # error_code
-                view.error_summary = f"{item_row[7]}: {item_row[8] or 'No details'}"
+            if item_row[13]:  # error_code
+                view.error_summary = f"{item_row[13]}: {item_row[14] or 'No details'}"
 
             # Get Batch 4 semantic facts from related tables
             await self._populate_batch4_facts(view, item_id)
@@ -483,9 +503,9 @@ class ReviewQueryService:
             if has_failures is True:
                 where_conditions.append("""
                     (
-                        status_axes->>'parse_status' = 'failed'
-                        OR status_axes->>'storage_status' = 'failed'
-                        OR status_axes->>'metadata_persistence_status' = 'failed'
+                        parse_status = 'failed'
+                        OR storage_status = 'failed'
+                        OR metadata_persistence_status = 'failed'
                     )
                 """)
 

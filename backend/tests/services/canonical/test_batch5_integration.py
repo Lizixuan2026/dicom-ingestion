@@ -156,14 +156,14 @@ class TestC6RetryReplayFoundation:
         mock_session = MagicMock()
         mock_store = MagicMock()
 
-        # Item with storage URI
+        # Item with storage URI — 19 columns matching the new _fetch_item SELECT
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             123, 456, "/path/file.dcm", 1024, "fp123",
-            {"scan_status": "completed", "storage_status": "completed"},
+            "completed", "completed", "completed", "completed",
+            "completed", "completed", "completed",
             "failed", "s3://bucket/file", "stored", "sha256:abc",
-            "metadata_persistence", "MetadataPersistenceFailed", "DB error",
-            None, None
+            "metadata_persistence", "MetadataPersistenceFailed", "DB error"
         )
         mock_session.execute.return_value = item_result
 
@@ -225,13 +225,18 @@ class TestD1ReviewQueries:
         """D1: Review views include Batch 4 semantic facts."""
         mock_session = MagicMock()
 
-        # Mock item query
+        # Mock item query — 17 columns matching the new get_item_review_view SELECT:
+        # id, job_id, source_path, byte_size, fingerprint,
+        # scan_status, parse_status, storage_status, metadata_persistence_status,
+        # validation_status, binding_status, index_status,
+        # terminal_outcome, error_code, error_detail, created_at, updated_at
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             1, 2, "/test.dcm", 1024, "fp123",
-            {"scan_status": "completed", "parse_status": "completed"},
+            "completed", "completed", "completed", "completed",
+            "completed", "completed", "completed",
             None, None, None,
-            datetime.now(), datetime.now(), None
+            datetime.now(), datetime.now()
         )
 
         # Mock Batch 4 facts queries
@@ -244,6 +249,9 @@ class TestD1ReviewQueries:
         count_result = MagicMock()
         count_result.scalar.return_value = 5
 
+        binding_result = MagicMock()
+        binding_result.fetchone.return_value = ("bound", "project-1", "user-1")
+
         def mock_execute(sql, params=None):
             if "FROM dicom_ingestion_items i" in sql:
                 return item_result
@@ -251,6 +259,8 @@ class TestD1ReviewQueries:
                 return obs_result
             elif "FROM dicom_duplicate_findings" in sql:
                 return dup_result
+            elif "FROM dicom_binding_policies" in sql:
+                return binding_result
             return count_result
 
         mock_session.execute.side_effect = mock_execute
@@ -275,13 +285,14 @@ class TestD1ReviewQueries:
         """D1: Review status is computed consistently from state."""
         mock_session = MagicMock()
 
-        # Item with terminal outcome
+        # Item with quarantined outcome — 17 columns matching get_item_review_view SELECT
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             1, 2, "/test.dcm", 1024, "fp123",
-            {"scan_status": "completed"},
+            "completed", "completed", "completed", "completed",
+            "completed", "completed", "completed",
             "quarantined", None, None,
-            datetime.now(), datetime.now(), None
+            datetime.now(), datetime.now()
         )
 
         obs_result = MagicMock()
@@ -467,12 +478,11 @@ class TestBatch5Integration:
             projection_service=mock_projection,
         )
 
-        import asyncio
-        job = asyncio.run(workflow.create_job(
+        job = await workflow.create_job(
             name="Batch 5 Integration Test",
             description="Testing C5 and D3 together",
             created_by="test",
-        ))
+        )
 
         assert job.id == 1
 
@@ -482,14 +492,14 @@ class TestBatch5Integration:
         mock_session = MagicMock()
         mock_store = MagicMock()
 
-        # Item that can be replayed
+        # Item that can be replayed — 19 columns matching the new _fetch_item SELECT
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             123, 456, "/path/file.dcm", 1024, "fp123",
-            {"scan_status": "completed"},
+            "completed", "completed", "completed", "completed",
+            "completed", "completed", "completed",
             "failed", "s3://bucket/file", "stored", "sha256:abc",
-            "parse", "ParseFailed", "Parse error",
-            None, None
+            "parse", "ParseFailed", "Parse error"
         )
         mock_session.execute.return_value = item_result
 

@@ -21,6 +21,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _result_rows(result: Any) -> List[Any]:
+    """Return SQLAlchemy result rows, supporting both real results and test mocks."""
+    fetchall = getattr(result, "fetchall", None)
+    if callable(fetchall):
+        rows = fetchall()
+        if isinstance(rows, (list, tuple)):
+            return list(rows)
+    return list(result)
+
+
 class ReplayStage(str, Enum):
     """Stages of ingestion that can be replayed."""
     SCAN = "scan"
@@ -345,6 +355,7 @@ class ReplayService:
                 success,
                 final_status,
                 error_code,
+                error_detail,
                 replayed_at,
                 stage_results
             FROM dicom_replay_history
@@ -353,7 +364,7 @@ class ReplayService:
             LIMIT :limit
         """
 
-        result = self._session.execute(sql, params)
+        result = _result_rows(self._session.execute(sql, params))
 
         history = []
         for row in result:
@@ -364,8 +375,9 @@ class ReplayService:
                 "success": row[3],
                 "final_status": row[4],
                 "error_code": row[5],
-                "replayed_at": row[6],
-                "stage_results": row[7],
+                "error_detail": row[6],
+                "replayed_at": row[7],
+                "stage_results": row[8],
             })
 
         return history
@@ -412,15 +424,20 @@ class ReplayService:
                 source_path,
                 byte_size,
                 item_fingerprint,
-                status_axes,
+                scan_status,
+                parse_status,
+                storage_status,
+                metadata_persistence_status,
+                validation_status,
+                binding_status,
+                index_status,
                 terminal_outcome,
                 storage_uri,
                 raw_object_status,
                 raw_object_sha256,
                 last_retryable_stage,
                 error_code,
-                error_detail,
-                series_ingestion_attempt_id
+                error_detail
             FROM dicom_ingestion_items
             WHERE id = :item_id
         """
@@ -440,15 +457,23 @@ class ReplayService:
         item.source_path = row[2]
         item.byte_size = row[3]
         item.item_fingerprint = row[4]
-        item.status_axes = row[5] or {}
-        item.terminal_outcome = row[6] or ""
-        item.storage_uri = row[7] or ""
-        item.raw_object_status = row[8] or ""
-        item.raw_object_sha256 = row[9] or ""
-        item.last_retryable_stage = row[10] or ""
-        item.error_code = row[11] or ""
-        item.error_detail = row[12] or ""
-        item.series_ingestion_attempt_id = row[13]
+        # Reconstruct status_axes dict from the seven real columns
+        item.status_axes = {
+            "scan_status": row[5] or "pending",
+            "parse_status": row[6] or "pending",
+            "storage_status": row[7] or "pending",
+            "metadata_persistence_status": row[8] or "pending",
+            "validation_status": row[9] or "pending",
+            "binding_status": row[10] or "pending",
+            "index_status": row[11] or "pending",
+        }
+        item.terminal_outcome = row[12] or ""
+        item.storage_uri = row[13] or ""
+        item.raw_object_status = row[14] or ""
+        item.raw_object_sha256 = row[15] or ""
+        item.last_retryable_stage = row[16] or ""
+        item.error_code = row[17] or ""
+        item.error_detail = row[18] or ""
 
         return item
 
@@ -642,7 +667,11 @@ class ReplayService:
             Current status string
         """
         sql = """
-            SELECT terminal_outcome, status_axes
+            SELECT
+                terminal_outcome,
+                scan_status, parse_status, storage_status,
+                metadata_persistence_status, validation_status,
+                binding_status, index_status
             FROM dicom_ingestion_items
             WHERE id = :item_id
         """
@@ -652,16 +681,24 @@ class ReplayService:
         if not row:
             return "unknown"
 
-        terminal_outcome, status_axes = row
+        terminal_outcome = row[0]
         if terminal_outcome:
             return terminal_outcome
 
-        # Determine from status axes
-        if isinstance(status_axes, dict):
-            if all(v == "completed" for v in status_axes.values()):
-                return "completed"
-            if any(v == "failed" for v in status_axes.values()):
-                return "failed"
+        # Reconstruct status dict from the seven real columns
+        status_axes = {
+            "scan_status": row[1] or "pending",
+            "parse_status": row[2] or "pending",
+            "storage_status": row[3] or "pending",
+            "metadata_persistence_status": row[4] or "pending",
+            "validation_status": row[5] or "pending",
+            "binding_status": row[6] or "pending",
+            "index_status": row[7] or "pending",
+        }
+        if all(v == "completed" for v in status_axes.values()):
+            return "completed"
+        if any(v == "failed" for v in status_axes.values()):
+            return "failed"
 
         return "in_progress"
 
@@ -746,9 +783,9 @@ class ReplayService:
                 (
                     terminal_outcome = 'failed'
                     OR last_retryable_stage IS NOT NULL
-                    OR status_axes->>'parse_status' = 'failed'
-                    OR status_axes->>'storage_status' = 'failed'
-                    OR status_axes->>'metadata_persistence_status' = 'failed'
+                    OR parse_status = 'failed'
+                    OR storage_status = 'failed'
+                    OR metadata_persistence_status = 'failed'
                 )
             """)
 
@@ -763,7 +800,7 @@ class ReplayService:
         """
         params["max_retries"] = request.max_retries * 10  # Get more for batching
 
-        result = self._session.execute(sql, params)
+        result = _result_rows(self._session.execute(sql, params))
         item_ids = [row[0] for row in result]
 
         # Limit to max retries total

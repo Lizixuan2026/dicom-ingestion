@@ -5,6 +5,8 @@ This module provides the UploadService which accepts upload input,
 persists raw bytes to object storage, and returns an UploadPackage
 with a URI pointing to the stored bytes.
 """
+from __future__ import annotations
+
 import hashlib
 from dataclasses import dataclass
 from typing import BinaryIO

@@ -820,7 +820,7 @@ class CanonicalPersistenceService:
                 "ingestion_item_id": item.id,
                 "raw_object_uri": item.storage_uri,
                 "whole_file_sha256": raw_bytes_hash,
-                "pixel_digest": None,  # Would need pixel extraction for this
+                "pixel_digest": getattr(parsed_header, "pixel_digest", None),  # Set in FULL parse mode
                 "raw_tag_set_uri": None,  # Could store to object storage if needed
                 "raw_tag_set_json": self._safe_json_dumps(raw_tag_set, item.id),
             }
