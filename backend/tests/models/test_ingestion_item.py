@@ -174,6 +174,15 @@ class TestIngestionItemStateTracking:
         assert item.terminal_outcome == TerminalOutcome.REJECTED.value
         assert item.error_code == "Not a DICOM file"
 
+    def test_mark_scanned_rejected_uses_default_not_dicom_error_code(self):
+        """mark_scanned for non-DICOM without reason should use default reject code."""
+        item = IngestionItem()
+        item.mark_scanned(is_dicom=False)
+
+        assert item.status_axes.scan_status == ItemStatusValue.REJECTED.value
+        assert item.terminal_outcome == TerminalOutcome.REJECTED.value
+        assert item.error_code == IngestionItem.ERROR_NOT_DICOM
+
     def test_mark_parsed_success(self):
         """mark_parsed success should complete parse_status."""
         item = IngestionItem()

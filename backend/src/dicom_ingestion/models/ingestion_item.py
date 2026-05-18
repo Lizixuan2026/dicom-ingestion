@@ -183,6 +183,7 @@ class IngestionItem:
     ERROR_UPLOAD_TOO_LARGE = "UploadTooLarge"
     ERROR_ZIP_BOMB = "ZipBombDetected"
     ERROR_PATH_TRAVERSAL = "UnsafeArchivePath"
+    ERROR_NOT_DICOM = "NotDicomFile"
     ERROR_PARSE_FAILED = "DicomParseFailed"
     ERROR_MISSING_REQUIRED_TAG = "MissingRequiredDicomTag"
     ERROR_STORAGE_FAILED = "UploadPackageStoreFailed"
@@ -241,15 +242,11 @@ class IngestionItem:
             is_dicom: True if identified as DICOM
             error_reason: Reason if rejected
         """
-        if error_reason:
-            self.status_axes.scan_status = ItemStatusValue.REJECTED.value
-            self.error_code = error_reason
-            self.terminal_outcome = TerminalOutcome.REJECTED.value
-        elif is_dicom:
+        if is_dicom:
             self.status_axes.scan_status = ItemStatusValue.COMPLETED.value
         else:
             self.status_axes.scan_status = ItemStatusValue.REJECTED.value
-            self.error_code = self.ERROR_PARSE_FAILED
+            self.error_code = error_reason or self.ERROR_NOT_DICOM
             self.terminal_outcome = TerminalOutcome.REJECTED.value
         self.updated_at = datetime.utcnow()
 
