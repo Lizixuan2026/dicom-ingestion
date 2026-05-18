@@ -151,6 +151,12 @@ class TestIngestionItemStatusUpdates:
 class TestIngestionItemStateTracking:
     """Tests for item state tracking methods."""
 
+    def test_default_item_is_not_dicom(self):
+        """Newly created items should not be considered DICOM before scan completes."""
+        item = IngestionItem()
+
+        assert item.is_dicom is False
+
     def test_mark_seen(self):
         """mark_seen should set scan_status to SEEN."""
         item = IngestionItem()
@@ -166,13 +172,14 @@ class TestIngestionItemStateTracking:
         assert item.is_dicom is True
 
     def test_mark_scanned_rejected(self):
-        """mark_scanned for non-DICOM should reject."""
+        """mark_scanned for non-DICOM should reject and not be considered DICOM."""
         item = IngestionItem()
         item.mark_scanned(is_dicom=False, error_reason="Not a DICOM file")
 
         assert item.status_axes.scan_status == ItemStatusValue.REJECTED.value
         assert item.terminal_outcome == TerminalOutcome.REJECTED.value
         assert item.error_code == "Not a DICOM file"
+        assert item.is_dicom is False
 
     def test_mark_parsed_success(self):
         """mark_parsed success should complete parse_status."""
