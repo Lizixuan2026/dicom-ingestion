@@ -146,7 +146,7 @@ class CanonicalPersistenceService:
             result.series_id = series_id
 
             # Get or create instance
-            instance_id, is_new_instance = await self._get_or_create_instance(
+            instance_id = await self._get_or_create_instance(
                 study_id, series_id, required_tags, parsed_header
             )
             result.instance_id = instance_id
@@ -157,14 +157,8 @@ class CanonicalPersistenceService:
             )
             result.observation_id = observation_id
 
-            # Mark as canonical if this is the first observation for the instance
-            if is_new_instance:
-                await self._mark_canonical(instance_id, observation_id)
-                result.is_new_canonical = True
-                self._logger.info(
-                    "Marked observation %s as canonical for instance %s",
-                    observation_id, instance_id
-                )
+            # Try to mark as canonical if no canonical currently exists
+            result.is_new_canonical = await self._mark_canonical(instance_id, observation_id)
 
             result.success = True
             self._logger.info(
@@ -381,7 +375,7 @@ class CanonicalPersistenceService:
 
     async def _get_or_create_instance(
         self, study_id: int, series_id: int, tags: dict[str, Any], parsed_header: Any
-    ) -> tuple[int, bool]:
+    ) -> int:
         """Get existing instance or create new one.
 
         Args:
@@ -391,23 +385,9 @@ class CanonicalPersistenceService:
             parsed_header: Parsed DICOM header for additional metadata
 
         Returns:
-            Tuple of (instance_id, is_new_instance)
+            instance_id
         """
         sop_uid = tags.get("SOPInstanceUID")
-
-        # Try to find existing instance
-        result = self._session.execute(
-            """
-            SELECT id, current_canonical_observation_id
-            FROM dicom_instances WHERE sop_instance_uid = :uid
-            """,
-            {"uid": sop_uid}
-        )
-        row = result.fetchone()
-
-        if row:
-            # Instance exists
-            return row[0], False
 
         # Parse instance number
         instance_number = None
@@ -451,7 +431,7 @@ class CanonicalPersistenceService:
                 "pixel_data_present": pixel_data_present,
             }
         )
-        return result.fetchone()[0], True
+        return result.fetchone()[0]
 
     async def _create_observation(
         self,
@@ -506,7 +486,7 @@ class CanonicalPersistenceService:
         )
         return result.fetchone()[0]
 
-    async def _mark_canonical(self, instance_id: int, observation_id: int) -> None:
+    async def _mark_canonical(self, instance_id: int, observation_id: int) -> bool:
         """Mark an observation as canonical for an instance.
 
         This implements the canonical observation policy:
@@ -517,7 +497,30 @@ class CanonicalPersistenceService:
             instance_id: Instance ID
             observation_id: Observation ID to mark as canonical
         """
-        # Mark observation as canonical
+        update_result = self._session.execute(
+            """
+            UPDATE dicom_instances
+            SET current_canonical_observation_id = :observation_id,
+                ingestion_status = 'canonical',
+                updated_at = NOW()
+            WHERE id = :instance_id
+              AND current_canonical_observation_id IS NULL
+            RETURNING id
+            """,
+            {
+                "instance_id": instance_id,
+                "observation_id": observation_id,
+            }
+        )
+        updated_instance = update_result.fetchone()
+        if not updated_instance:
+            self._logger.info(
+                "Canonical already exists for instance %s, observation %s remains non-canonical",
+                instance_id,
+                observation_id,
+            )
+            return False
+
         self._session.execute(
             """
             UPDATE dicom_instance_observations
@@ -526,21 +529,11 @@ class CanonicalPersistenceService:
             """,
             {"observation_id": observation_id}
         )
-
-        # Update instance to point to this canonical observation
-        self._session.execute(
-            """
-            UPDATE dicom_instances
-            SET current_canonical_observation_id = :observation_id,
-                ingestion_status = 'canonical',
-                updated_at = NOW()
-            WHERE id = :instance_id
-            """,
-            {
-                "instance_id": instance_id,
-                "observation_id": observation_id,
-            }
+        self._logger.info(
+            "Marked observation %s as canonical for instance %s",
+            observation_id, instance_id
         )
+        return True
 
     async def validate_canonical(self, instance_id: int) -> bool:
         """Validate the canonical representation of an instance.

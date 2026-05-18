@@ -112,19 +112,12 @@ class TestCanonicalPersistenceService:
         mock_session: MagicMock,
     ):
         """Test successful persistence creates all canonical records."""
-        # Setup mock: SELECT queries return None (not exists), INSERTs return IDs
+        # Setup mock: INSERT/UPDATE queries return IDs
         call_count = [0]
         def mock_execute(query, params=None):
             result = MagicMock()
-            query_str = str(query) if isinstance(query, str) else str(query.text if hasattr(query, 'text') else query)
-
-            # SELECT queries check for existing records - return None (not found)
-            if "SELECT" in query_str.upper() and "FROM" in query_str.upper():
-                result.fetchone = MagicMock(return_value=None)
-            else:
-                # INSERT/UPDATE queries - return new ID
-                call_count[0] += 1
-                result.fetchone = MagicMock(return_value=(call_count[0],))
+            call_count[0] += 1
+            result.fetchone = MagicMock(return_value=(call_count[0],))
 
             return result
 
@@ -138,6 +131,35 @@ class TestCanonicalPersistenceService:
         assert result.instance_id is not None
         assert result.observation_id is not None
         assert result.is_new_canonical is True
+
+    @pytest.mark.asyncio
+    async def test_persist_when_instance_already_has_canonical(
+        self,
+        persistence_service: CanonicalPersistenceService,
+        sample_ingestion_item: IngestionItem,
+        sample_parsed_header: ParsedDicomHeader,
+        mock_session: MagicMock,
+    ):
+        """Existing canonical should keep new observation non-canonical."""
+        call_count = [0]
+
+        def mock_execute(query, params=None):
+            result = MagicMock()
+            query_str = str(query) if isinstance(query, str) else str(query.text if hasattr(query, "text") else query)
+            call_count[0] += 1
+
+            if "UPDATE DICOM_INSTANCES" in query_str.upper() and "RETURNING ID" in query_str.upper():
+                result.fetchone = MagicMock(return_value=None)
+            else:
+                result.fetchone = MagicMock(return_value=(call_count[0],))
+            return result
+
+        mock_session.execute = mock_execute
+
+        result = await persistence_service.persist(sample_ingestion_item, sample_parsed_header)
+
+        assert result.success is True
+        assert result.is_new_canonical is False
 
     @pytest.mark.asyncio
     async def test_persist_missing_required_tags_returns_failure(
