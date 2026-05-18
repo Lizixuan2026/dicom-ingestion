@@ -1,10 +1,27 @@
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/dicom_test"
+DATABASE_URL = "postgresql://postgres:postgres@localhost:5532/dicom_test"
+
+# Check if PostgreSQL is available
+def is_postgres_available():
+    try:
+        engine = create_engine(DATABASE_URL)
+        connection = engine.connect()
+        connection.close()
+        return True
+    except (OperationalError, sa.exc.DatabaseError):
+        return False
+
+POSTGRES_AVAILABLE = is_postgres_available()
+
+pytestmark = pytest.mark.skipif(
+    not POSTGRES_AVAILABLE,
+    reason="PostgreSQL not available"
+)
 
 @pytest.fixture(scope="session")
 def engine():
