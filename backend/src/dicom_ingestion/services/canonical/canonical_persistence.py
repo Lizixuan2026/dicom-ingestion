@@ -434,6 +434,28 @@ class CanonicalPersistenceService:
                     result.binding_policy_result = {}
                 result.binding_policy_result["context_fallback"] = "system_default"
                 result.binding_policy_result["context_fallback_reason"] = "BINDING_CONTEXT_MISSING"
+            elif (
+                not isinstance(binding_context, BindingContext)
+                and not (
+                    hasattr(binding_context, "project_id")
+                    and hasattr(binding_context, "user_id")
+                )
+            ):
+                invalid_type = type(binding_context).__name__
+                self._logger.warning(
+                    "Binding context invalid for instance %s: type=%s, using system default",
+                    instance_id,
+                    invalid_type,
+                )
+                binding_context = BindingContext(
+                    project_id="system_default",
+                    user_id="system",
+                )
+                if result.binding_policy_result is None:
+                    result.binding_policy_result = {}
+                result.binding_policy_result["context_fallback"] = "system_default"
+                result.binding_policy_result["context_fallback_reason"] = "BINDING_CONTEXT_INVALID"
+                result.binding_policy_result["context_invalid_type"] = invalid_type
 
             bind_result = await bind_service.create_binding_record(
                 instance_id=instance_id,
