@@ -29,6 +29,7 @@
 | Q5 | 重复检测报告应按Series维度聚合，而非逐个列出SOP（批量重复时用户体验优化） | duplicate_detection.py, duplicate_finding.py, terminal_report.py | 2026-05-18 19:07 | **确认需求**。现状：1) 检测逐个检查observation 2) DuplicateFindingSummary只有by_sop_instance_uid 3) 报告层只有duplicate_findings计数。需要：按SeriesInstanceUID聚合的重复检测摘要/告警 | ✅ 已确认/📝 需UX优化 |
 | Q6 | 绑定目标类型中"STUDY"概念容易与dicom_studies表混淆，建议去掉 | binding_policy.py | 2026-05-18 19:23 | **确认变更**。Q6解释了STUDY绑定目标是指"平台的Study对象（业务概念）"，但用户认为这个概念容易与dicom_studies表（DICOM元数据）混淆。同意去掉STUDY作为BindingTargetType，后续如果需要平台业务层的Study绑定，可以用其他命名（如RESEARCH_STUDY/PROJECT_STUDY） | 📝 变更待执行 |
 | Q7 | 支持双模式存储架构（对象存储+本地/公盘存储），本地存储需按DICOM Tag层级组织目录结构 | raw_object_store.py, dicom_parser.py, storage/ | 2026-05-18 19:36 | **需求已理解**。用户提供了完整的存储结构设计文档（016_data_storage_structure_design.md），包含：1) 双模式存储（对象存储扁平化 vs 本地存储层级化） 2) 本地存储路径依赖DICOM Tag（厂商/设备/StudyUID/MeasUID/SeriesUID） 3) 多模态数据支持 4) Annotation存储结构。与REQ-002强相关（需要提取Private tag如MeasUID） | ✅ 已理解/📝 需架构设计 |
+| Q8 | 当前上传是否支持分块上传？对于大DICOM文件需要分块上传能力 | upload_service.py, scan_service.py, 前端upload组件 | 2026-05-18 19:44 | **确认现状**：当前使用multipart/form-data一次性完整上传，不支持分块上传。**用户核心诉求**：支持分块上传功能，DICOM文件通常100MB-1GB，需要：1) 前端分块切片 2) 并发上传 3) 进度可见 4) 断点续传 5) 后端组装。**推荐方案**：前端分块（File.slice）+ 后端组装（临时存储+校验+合并） | ✅ 已理解/📝 需求待实现 |
 
 ---
 
@@ -36,6 +37,8 @@
 
 ### 1. 上传与接收 (upload/)
 - Q2: 不支持文件夹上传（只支持单文件或ZIP）
+- Q8: 不支持分块上传（需要支持大文件分块、断点续传）
+- REQ-006: 分块上传功能（前端分块+后端组装）
 
 ### 2. 扫描与安全 (scanner/)
 - Q2: 扫描服务只处理ZIP或单文件，无目录处理逻辑
@@ -73,6 +76,7 @@
 | REQ-004 | Series维度重复检测聚合报告（批量重复用户体验优化） | duplicate_detection.py, duplicate_finding.py, terminal_report.py, 新增 duplicate_alert_service | 中 | 1) DuplicateFindingSummary增加by_series_instance_uid聚合 2) 新增SeriesDuplicateSummary（Series级别重复摘要） 3) 批量重复检测时生成聚合告警而非单个SOP告警 4) 终端报告增加Series重复维度统计 5) 支持配置阈值（如Series内超过N个重复才聚合告警） | 📝 已记录 |
 | CHANGE-001 | 从BindingTargetType中移除STUDY枚举值 | binding_policy.py:24-30 | 低 | 1) 从BindingTargetType枚举中删除STUDY = "study" 2) 检查并更新任何引用STUDY类型的代码 3) 如果未来需要平台业务层Study绑定，使用更清晰的命名如RESEARCH_STUDY或PROJECT_STUDY | 📝 变更待执行 |
 | REQ-005 | 双模式存储架构 + 层级化本地存储路径（支持对象存储和本地/公盘存储，本地存储按DICOM Tag层级组织） | raw_object_store.py, 新增 storage_backend/, path_generator/, multimodal/ 模块 | 高 | 1) 抽象存储后端接口（StorageBackend）支持对象存储和本地存储 2) 路径生成策略（PathGenerator）：对象存储用content_hash扁平化，本地存储用DICOM Tag层级化 3) DICOM Tag提取增强：需要提取厂商、设备名、MeasUID（Private tag） 4) 多模态数据分流：DICOM/RawData/IMAGE/TEXT/DOCUMENT/AUDIO/VIDEO/STRUCTURED 5) Annotation存储结构 6) 与REQ-002强相关：需要Private tag解析能力 | 📝 已记录 |
+| REQ-006 | 分块上传功能（支持大DICOM文件上传、进度可见、断点续传） | upload_service.py, 新增 chunk_upload/, frontend_upload组件, assembly_service | 高 | 1) 前端分块：File.slice()切分文件（建议5MB/块），并发上传 2) 后端分块接收：/upload/chunk接口，临时存储分块（Redis/文件系统） 3) 分块校验：每块校验MD5/SHA256 4) 分块组装：所有分块到齐后组装完整文件 5) 断点续传：记录上传进度，失败只重传失败分块 6) 与REQ-001配合：文件夹上传大文件需要分块 | 📝 已记录 |
 
 ### REQ-001 实现建议
 
@@ -720,29 +724,456 @@ storage:
 | REQ-004 | 独立 | Series重复检测与存储无关 |
 | CHANGE-001 | 独立 | 绑定类型与存储无关 |
 
+### REQ-006 实现建议（分块上传功能）
+
+**背景**：DICOM文件通常100MB-1GB，当前一次性上传在大文件/不稳定网络环境下体验差。需要支持分块上传、进度可见、断点续传。
+
+**核心诉求**：
+1. **前端分块切片**：大文件切分为小块（如5MB），并发上传
+2. **进度可见**：上传进度条让用户知道状态
+3. **断点续传**：失败后只重传失败分块，不用从头开始
+4. **后端组装**：接收分块、校验、合并成完整文件
+
+**1. 前端分块上传实现**
+```javascript
+// frontend/upload/chunked_uploader.js
+class ChunkedUploader {
+    constructor(options = {}) {
+        this.chunkSize = options.chunkSize || 5 * 1024 * 1024; // 默认5MB
+        this.concurrency = options.concurrency || 3; // 并发数
+        this.retryCount = options.retryCount || 3; // 重试次数
+    }
+    
+    async uploadFile(file, metadata = {}) {
+        // 1. 计算文件指纹（用于断点续传识别）
+        const fileHash = await this.calculateFileHash(file);
+        
+        // 2. 初始化上传任务（获取upload_id）
+        const initResponse = await this.initUpload({
+            filename: file.name,
+            size: file.size,
+            hash: fileHash,
+            metadata: metadata
+        });
+        const uploadId = initResponse.upload_id;
+        
+        // 3. 分块
+        const chunks = this.createChunks(file);
+        const totalChunks = chunks.length;
+        
+        // 4. 检查已上传的分块（断点续传）
+        const uploadedChunks = await this.getUploadedChunks(uploadId);
+        
+        // 5. 并发上传未上传的分块
+        const uploadTasks = chunks
+            .filter(chunk => !uploadedChunks.includes(chunk.index))
+            .map(chunk => this.uploadChunk(uploadId, chunk, fileHash));
+        
+        // 控制并发数
+        await this.runWithConcurrency(uploadTasks, this.concurrency, (progress) => {
+            this.onProgress(progress);
+        });
+        
+        // 6. 通知后端组装
+        const result = await this.finalizeUpload(uploadId);
+        return result;
+    }
+    
+    createChunks(file) {
+        const chunks = [];
+        let start = 0;
+        let index = 0;
+        
+        while (start < file.size) {
+            const end = Math.min(start + this.chunkSize, file.size);
+            chunks.push({
+                index: index,
+                blob: file.slice(start, end),
+                start: start,
+                end: end,
+                size: end - start
+            });
+            start = end;
+            index++;
+        }
+        
+        return chunks;
+    }
+    
+    async uploadChunk(uploadId, chunk, fileHash) {
+        const formData = new FormData();
+        formData.append('upload_id', uploadId);
+        formData.append('chunk_index', chunk.index);
+        formData.append('chunk_hash', await this.calculateChunkHash(chunk.blob));
+        formData.append('file_hash', fileHash);
+        formData.append('chunk', chunk.blob);
+        
+        let retries = 0;
+        while (retries < this.retryCount) {
+            try {
+                const response = await fetch('/api/upload/chunk', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    return await response.json();
+                }
+                throw new Error(`Chunk ${chunk.index} upload failed`);
+            } catch (error) {
+                retries++;
+                if (retries >= this.retryCount) {
+                    throw error;
+                }
+                await this.delay(1000 * retries); // 指数退避
+            }
+        }
+    }
+    
+    calculateFileHash(file) {
+        // 使用spark-md5或类似库计算文件hash
+        // 大文件可以只计算开头/结尾/中间部分
+        return sparkMd5.hash(file.slice(0, 1024 * 1024)); // 前1MB
+    }
+}
+```
+
+**2. 后端分块接收与组装**
+```python
+# services/upload/chunk_upload_service.py
+import os
+import hashlib
+import tempfile
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+from redis import Redis
+
+@dataclass
+class ChunkInfo:
+    """分块信息"""
+    index: int
+    size: int
+    hash: str
+    received: bool = False
+    stored_path: str = ""
+
+class ChunkUploadService:
+    """分块上传服务"""
+    
+    def __init__(self, 
+                 temp_storage_path: str = "/tmp/chunks",
+                 redis_client: Optional[Redis] = None):
+        self.temp_path = temp_storage_path
+        self.redis = redis_client
+        os.makedirs(temp_storage_path, exist_ok=True)
+    
+    def init_upload(self, 
+                    filename: str, 
+                    file_size: int, 
+                    file_hash: str,
+                    total_chunks: int,
+                    metadata: dict = None) -> dict:
+        """
+        初始化上传任务
+        
+        Returns:
+            upload_id: 上传任务ID
+            uploaded_chunks: 已上传的分块索引列表（断点续传）
+        """
+        import uuid
+        upload_id = str(uuid.uuid4())
+        
+        # 保存上传任务元数据
+        upload_info = {
+            "upload_id": upload_id,
+            "filename": filename,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "total_chunks": total_chunks,
+            "metadata": metadata or {},
+            "status": "uploading",
+            "created_at": datetime.utcnow().isoformat()
+        }
+        
+        # 存储到Redis或数据库
+        self._save_upload_info(upload_id, upload_info)
+        
+        # 检查是否有已上传的分块（断点续传）
+        uploaded_chunks = self._get_uploaded_chunks(upload_id)
+        
+        return {
+            "upload_id": upload_id,
+            "uploaded_chunks": uploaded_chunks
+        }
+    
+    def receive_chunk(self,
+                      upload_id: str,
+                      chunk_index: int,
+                      chunk_hash: str,
+                      chunk_data: bytes) -> dict:
+        """
+        接收单个分块
+        
+        Args:
+            upload_id: 上传任务ID
+            chunk_index: 分块索引
+            chunk_hash: 分块哈希（前端计算）
+            chunk_data: 分块数据
+            
+        Returns:
+            接收结果
+        """
+        # 1. 校验分块哈希
+        actual_hash = hashlib.md5(chunk_data).hexdigest()
+        if actual_hash != chunk_hash:
+            return {
+                "success": False,
+                "error": "Chunk hash mismatch",
+                "chunk_index": chunk_index
+            }
+        
+        # 2. 保存分块到临时存储
+        chunk_path = os.path.join(
+            self.temp_path, 
+            upload_id, 
+            f"chunk_{chunk_index:04d}"
+        )
+        os.makedirs(os.path.dirname(chunk_path), exist_ok=True)
+        
+        with open(chunk_path, 'wb') as f:
+            f.write(chunk_data)
+        
+        # 3. 记录分块已接收
+        self._mark_chunk_received(upload_id, chunk_index, chunk_path)
+        
+        # 4. 检查是否所有分块都已上传
+        upload_info = self._get_upload_info(upload_id)
+        received_chunks = self._get_uploaded_chunks(upload_id)
+        
+        is_complete = len(received_chunks) >= upload_info["total_chunks"]
+        
+        return {
+            "success": True,
+            "chunk_index": chunk_index,
+            "received_chunks": len(received_chunks),
+            "total_chunks": upload_info["total_chunks"],
+            "is_complete": is_complete
+        }
+    
+    def assemble_file(self, upload_id: str) -> dict:
+        """
+        组装所有分块为完整文件
+        
+        Returns:
+            组装结果，包含完整文件路径
+        """
+        upload_info = self._get_upload_info(upload_id)
+        uploaded_chunks = self._get_uploaded_chunks(upload_id)
+        
+        # 1. 检查所有分块是否到齐
+        if len(uploaded_chunks) < upload_info["total_chunks"]:
+            missing = set(range(upload_info["total_chunks"])) - set(uploaded_chunks)
+            return {
+                "success": False,
+                "error": f"Missing chunks: {missing}"
+            }
+        
+        # 2. 按顺序组装文件
+        assembled_path = os.path.join(
+            self.temp_path,
+            upload_id,
+            "assembled",
+            upload_info["filename"]
+        )
+        os.makedirs(os.path.dirname(assembled_path), exist_ok=True)
+        
+        with open(assembled_path, 'wb') as outfile:
+            for i in range(upload_info["total_chunks"]):
+                chunk_path = os.path.join(
+                    self.temp_path,
+                    upload_id,
+                    f"chunk_{i:04d}"
+                )
+                with open(chunk_path, 'rb') as infile:
+                    outfile.write(infile.read())
+        
+        # 3. 校验完整文件哈希
+        if not self._verify_assembled_file(assembled_path, upload_info["file_hash"]):
+            return {
+                "success": False,
+                "error": "Assembled file hash mismatch"
+            }
+        
+        # 4. 更新状态
+        upload_info["status"] = "assembled"
+        upload_info["assembled_path"] = assembled_path
+        self._save_upload_info(upload_id, upload_info)
+        
+        return {
+            "success": True,
+            "upload_id": upload_id,
+            "assembled_path": assembled_path,
+            "file_size": os.path.getsize(assembled_path)
+        }
+    
+    def finalize_upload(self, upload_id: str) -> dict:
+        """
+        完成上传，将组装好的文件送入原有处理流程
+        
+        调用UploadService继续处理：扫描 → 解析 → 存储
+        """
+        assemble_result = self.assemble_file(upload_id)
+        
+        if not assemble_result["success"]:
+            return assemble_result
+        
+        # 调用原有UploadService处理
+        from dicom_ingestion.services.upload.upload_service import UploadService
+        
+        upload_service = UploadService(object_store)
+        
+        with open(assemble_result["assembled_path"], 'rb') as f:
+            package = upload_service.accept(
+                input_data=f,
+                filename=upload_info["filename"]
+            )
+        
+        # 清理临时分块文件
+        self._cleanup_chunks(upload_id)
+        
+        return {
+            "success": True,
+            "upload_id": upload_id,
+            "package_uri": package.uri,
+            "status": "uploaded"
+        }
+    
+    def _cleanup_chunks(self, upload_id: str):
+        """清理临时分块文件"""
+        import shutil
+        chunk_dir = os.path.join(self.temp_path, upload_id)
+        if os.path.exists(chunk_dir):
+            shutil.rmtree(chunk_dir)
+```
+
+**3. API接口设计**
+```python
+# api/upload_api.py
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+
+router = APIRouter(prefix="/api/upload")
+
+@router.post("/init")
+async def init_upload(
+    filename: str = Form(...),
+    file_size: int = Form(...),
+    file_hash: str = Form(...),
+    total_chunks: int = Form(...),
+    metadata: str = Form("{}")
+):
+    """初始化分块上传任务"""
+    service = ChunkUploadService()
+    result = service.init_upload(
+        filename=filename,
+        file_size=file_size,
+        file_hash=file_hash,
+        total_chunks=total_chunks,
+        metadata=json.loads(metadata)
+    )
+    return result
+
+@router.post("/chunk")
+async def upload_chunk(
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    chunk_hash: str = Form(...),
+    file_hash: str = Form(...),
+    chunk: UploadFile = File(...)
+):
+    """上传单个分块"""
+    service = ChunkUploadService()
+    chunk_data = await chunk.read()
+    
+    result = service.receive_chunk(
+        upload_id=upload_id,
+        chunk_index=chunk_index,
+        chunk_hash=chunk_hash,
+        chunk_data=chunk_data
+    )
+    
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    
+    return result
+
+@router.post("/finalize")
+async def finalize_upload(upload_id: str = Form(...)):
+    """完成上传，组装分块并处理"""
+    service = ChunkUploadService()
+    result = service.finalize_upload(upload_id)
+    
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    
+    return result
+
+@router.get("/progress/{upload_id}")
+async def get_upload_progress(upload_id: str):
+    """获取上传进度（用于进度条）"""
+    service = ChunkUploadService()
+    info = service._get_upload_info(upload_id)
+    uploaded = service._get_uploaded_chunks(upload_id)
+    
+    return {
+        "upload_id": upload_id,
+        "total_chunks": info["total_chunks"],
+        "uploaded_chunks": len(uploaded),
+        "progress": len(uploaded) / info["total_chunks"],
+        "status": info["status"]
+    }
+```
+
+**4. 与现有需求的关系**
+
+| 需求 | 关系 | 说明 |
+|------|------|------|
+| REQ-001 | 强配合 | 文件夹上传大文件需要分块上传支持 |
+| REQ-006 | 主体 | 分块上传功能 |
+| 其他 | 独立 | 分块上传是前置步骤，与解析、存储等解耦 |
+
+**5. 实施建议**
+
+- **阶段1**：实现基础分块上传（前端切片 + 后端接收 + 组装）
+- **阶段2**：添加断点续传（记录已上传分块）
+- **阶段3**：优化并发和重试机制
+- **阶段4**：与 REQ-001 配合支持文件夹大文件上传
+
 ---
 
 ## 统计
 
-- 总问题数：7
-- 已解答：4
+- 总问题数：8
+- 已解答：5
   - Q1: 整体功能解释
   - Q3: DICOM解析需求确认
   - Q6: STUDY绑定概念解释
   - Q7: 双模式存储架构需求理解
-- 需求待实现：5
+  - Q8: 分块上传需求理解
+- 需求待实现：6
   - REQ-001: 文件夹上传
   - REQ-002: DICOM解析器架构升级（REQ-005强依赖）
   - REQ-003: Celery异步解析服务
   - REQ-004: Series维度重复检测聚合报告
   - REQ-005: 双模式存储 + 层级化本地存储路径
+  - REQ-006: 分块上传功能（前端分块+后端组装+断点续传）
 - 变更待执行：1
   - CHANGE-001: 从BindingTargetType移除STUDY
 - 需求依赖关系：
   - REQ-005（存储路径）→ 依赖 → REQ-002（Private tag提取）
+  - REQ-001（文件夹上传）→ 配合 → REQ-006（分块上传大文件）
 - 待回答：0
 - 需跟进：0
 
 ---
 
-*最后更新：2026-05-18 19:36*
+*最后更新：2026-05-18 19:44*
