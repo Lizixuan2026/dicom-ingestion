@@ -21,10 +21,26 @@ from dicom_ingestion.services.reporting.terminal_report import (
 from dicom_ingestion.models.ingestion_item import IngestionItem, ItemStatusAxes, TerminalOutcome
 
 
+class InMemoryTerminalReportRepository:
+    def __init__(self):
+        self.store = {}
+
+    def upsert_report(self, report):
+        self.store[report["summary"]["job_id"]] = report
+
+    def get_report(self, job_id: int):
+        return self.store.get(job_id)
+
+
 @pytest.fixture
-def report_service():
+def report_repo():
+    return InMemoryTerminalReportRepository()
+
+
+@pytest.fixture
+def report_service(report_repo):
     """Create a terminal report service fixture."""
-    return TerminalReportService()
+    return TerminalReportService(repository=report_repo)
 
 
 @pytest.fixture
@@ -354,6 +370,29 @@ class TestTerminalReportService:
         assert item_report.error_detail == "Connection timeout after 30s"
 
 
+
+    @pytest.mark.asyncio
+    async def test_report_persists_across_service_restart(self, sample_items):
+        repo = InMemoryTerminalReportRepository()
+        service_a = TerminalReportService(repository=repo)
+        await service_a.generate_job_report(job_id=100, items=sample_items)
+
+        service_b = TerminalReportService(repository=repo)
+        retrieved = service_b.get_report(100)
+
+        assert retrieved is not None
+        assert retrieved.summary.total_items == 4
+
+    @pytest.mark.asyncio
+    async def test_generate_same_job_overwrites_existing_report(self, sample_items):
+        repo = InMemoryTerminalReportRepository()
+        service = TerminalReportService(repository=repo)
+        await service.generate_job_report(job_id=100, items=sample_items)
+        await service.generate_job_report(job_id=100, items=sample_items[:2])
+
+        retrieved = service.get_report(100)
+        assert retrieved is not None
+        assert retrieved.summary.total_items == 2
 class TestItemTerminalReport:
     """Test suite for ItemTerminalReport."""
 
