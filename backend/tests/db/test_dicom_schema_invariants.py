@@ -165,3 +165,71 @@ def test_canonical_cross_instance_rejection(session):
     with pytest.raises(IntegrityError):
         with session.begin_nested():
             session.execute(sa.text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+def test_concurrent_conditional_canonical_update_only_one_wins(engine):
+    conn_setup = engine.connect()
+    tx_setup = conn_setup.begin()
+    try:
+        study_id = conn_setup.execute(sa.text("INSERT INTO dicom_studies (study_instance_uid) VALUES ('sd9') RETURNING id")).scalar()
+        series_id = conn_setup.execute(sa.text(f"INSERT INTO dicom_series (study_id, series_instance_uid) VALUES ({study_id}, 'se9') RETURNING id")).scalar()
+        instance_id = conn_setup.execute(sa.text(f"INSERT INTO dicom_instances (study_id, series_id, sop_instance_uid) VALUES ({study_id}, {series_id}, 'so9') RETURNING id")).scalar()
+        job_id = conn_setup.execute(sa.text("INSERT INTO dicom_ingestion_jobs (actor_id, source_type) VALUES ('a', 's') RETURNING id")).scalar()
+        item_1 = conn_setup.execute(sa.text(f"INSERT INTO dicom_ingestion_items (ingestion_job_id, item_fingerprint) VALUES ({job_id}, 'fp9a') RETURNING id")).scalar()
+        item_2 = conn_setup.execute(sa.text(f"INSERT INTO dicom_ingestion_items (ingestion_job_id, item_fingerprint) VALUES ({job_id}, 'fp9b') RETURNING id")).scalar()
+        obs_1 = conn_setup.execute(sa.text(f"INSERT INTO dicom_instance_observations (instance_id, ingestion_item_id, observed_at) VALUES ({instance_id}, {item_1}, now()) RETURNING id")).scalar()
+        obs_2 = conn_setup.execute(sa.text(f"INSERT INTO dicom_instance_observations (instance_id, ingestion_item_id, observed_at) VALUES ({instance_id}, {item_2}, now()) RETURNING id")).scalar()
+        tx_setup.commit()
+    finally:
+        conn_setup.close()
+
+    conn1 = engine.connect()
+    conn2 = engine.connect()
+    tx1 = conn1.begin()
+    tx2 = conn2.begin()
+    try:
+        winner_1 = conn1.execute(sa.text(
+            """
+            UPDATE dicom_instances
+            SET current_canonical_observation_id = :obs_id
+            WHERE id = :instance_id
+              AND current_canonical_observation_id IS NULL
+            RETURNING id
+            """
+        ), {"obs_id": obs_1, "instance_id": instance_id}).fetchone()
+        if winner_1:
+            conn1.execute(sa.text(
+                "UPDATE dicom_instance_observations SET is_canonical = true WHERE id = :obs_id"
+            ), {"obs_id": obs_1})
+        tx1.commit()
+
+        winner_2 = conn2.execute(sa.text(
+            """
+            UPDATE dicom_instances
+            SET current_canonical_observation_id = :obs_id
+            WHERE id = :instance_id
+              AND current_canonical_observation_id IS NULL
+            RETURNING id
+            """
+        ), {"obs_id": obs_2, "instance_id": instance_id}).fetchone()
+        if winner_2:
+            conn2.execute(sa.text(
+                "UPDATE dicom_instance_observations SET is_canonical = true WHERE id = :obs_id"
+            ), {"obs_id": obs_2})
+        tx2.commit()
+    finally:
+        conn1.close()
+        conn2.close()
+
+    assert (winner_1 is None) != (winner_2 is None)
+
+    with engine.connect() as check_conn:
+        canonical_count = check_conn.execute(sa.text(
+            """
+            SELECT count(*)
+            FROM dicom_instance_observations
+            WHERE instance_id = :instance_id
+              AND is_canonical = true
+            """
+        ), {"instance_id": instance_id}).scalar()
+    assert canonical_count == 1
