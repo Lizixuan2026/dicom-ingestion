@@ -6,6 +6,7 @@ This module provides the ScanService which scans upload packages
 safety checks and proper classification of DICOM vs non-DICOM content.
 """
 import io
+import logging
 import os
 import zipfile
 from dataclasses import dataclass, field
@@ -106,15 +107,19 @@ class ScanService:
     DICOM_MAGIC = b"DICM"
     DICOM_MAGIC_OFFSET = 128
 
-    def __init__(self, safety_limits: ZipSafetyLimits = None):
+    def __init__(self, safety_limits: ZipSafetyLimits = None, object_store=None):
         """
         Initialize the scan service.
 
         Args:
             safety_limits: ZipSafetyLimits for ZIP file scanning.
                          If None, uses default (conservative) limits.
+            object_store: Optional object storage client that supports
+                         get(uri) -> bytes.
         """
         self.safety_scanner = ZipSafetyScanner(limits=safety_limits or ZipSafetyLimits.conservative())
+        self._object_store = object_store
+        self._logger = logging.getLogger(__name__)
 
     def scan(
         self,
@@ -204,14 +209,28 @@ class ScanService:
         if hasattr(upload_package, 'getvalue'):
             return upload_package.getvalue()
 
+        # If it has a uri attribute, resolve from object storage
+        if hasattr(upload_package, 'uri') and getattr(upload_package, 'uri', None):
+            if self._object_store is None:
+                error_msg = f"Object store dependency is required to load upload package uri: {upload_package.uri}"
+                self._logger.error(error_msg)
+                raise RuntimeError(error_msg)
+
+            try:
+                return self._object_store.get(upload_package.uri)
+            except Exception as exc:
+                self._logger.exception(
+                    "Failed to read upload package from object storage URI: %s",
+                    upload_package.uri
+                )
+                return None
+
+        if hasattr(upload_package, 'bytes'):
+            return upload_package.bytes
+
         # If it has a get_bytes method
         if hasattr(upload_package, 'get_bytes'):
             return upload_package.get_bytes()
-
-        # If it has a uri attribute, we need an object store
-        # For now, assume the package provides access to bytes directly
-        if hasattr(upload_package, 'bytes'):
-            return upload_package.bytes
 
         # Try to read if file-like
         if hasattr(upload_package, 'read'):
