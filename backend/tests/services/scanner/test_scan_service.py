@@ -41,6 +41,16 @@ class MockUploadPackage:
         return self._bytes
 
 
+class MockObjectStore:
+    """Mock object store for URI-based package retrieval."""
+
+    def __init__(self, payload_by_uri):
+        self._payload_by_uri = payload_by_uri
+
+    def get(self, uri):
+        return self._payload_by_uri[uri]
+
+
 # Fixtures path
 FIXTURES_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'fixtures', 'dicom')
 
@@ -84,6 +94,23 @@ class TestScanServiceBasic:
         assert manifest.dicom_count == 1
         assert manifest.items[0].is_dicom is True
         assert manifest.items[0].scan_status == ScanStatus.PENDING
+
+    def test_scans_package_from_uri_via_object_store(self):
+        """Scanner should read package bytes from object_store when uri is provided."""
+        dicom_data = b"\x00" * 128 + b"DICM" + b"\x00" * 100
+        package = MockUploadPackage(
+            uri="s3://bucket/upload/test.dcm",
+            original_filename="test.dcm"
+        )
+        object_store = MockObjectStore({package.uri: dicom_data})
+        scan_service = ScanService(object_store=object_store)
+
+        manifest = scan_service.scan(package)
+
+        assert manifest.total_items == 1
+        assert manifest.dicom_count == 1
+        assert manifest.items[0].is_dicom is True
+        assert manifest.scan_errors == []
 
     def test_rejects_non_dicom_file(self, scan_service):
         """Non-DICOM files should be marked rejected_non_dicom."""
