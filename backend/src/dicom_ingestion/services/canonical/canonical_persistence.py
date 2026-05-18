@@ -179,6 +179,7 @@ class CanonicalPersistenceService:
         self,
         item: IngestionItem,
         parsed_header: ParsedDicomHeader,
+        binding_context: Optional[Any] = None,
     ) -> PersistenceResult:
         """Persist an ingestion item to canonical storage.
 
@@ -192,11 +193,12 @@ class CanonicalPersistenceService:
         7. C1: Detect and record duplicate facts
         8. C2: Persist private tags with redaction policy
         9. C3: Extract and store reference edges
-        10. C4: Create binding policy record
+        10. C4: Create binding policy record (with binding_context)
 
         Args:
             item: The ingestion item to persist
             parsed_header: The parsed DICOM header
+            binding_context: Optional BindingContext with project_id/user_id for C4 binding
 
         Returns:
             PersistenceResult with IDs and status
@@ -262,7 +264,7 @@ class CanonicalPersistenceService:
             # C4: Binding policy creation
             if self._enable_binding_policy:
                 await self._execute_binding_policy(
-                    result, instance_id, observation_id
+                    result, instance_id, observation_id, binding_context
                 )
 
             result.success = True
@@ -309,7 +311,7 @@ class CanonicalPersistenceService:
                 instance_id=instance_id,
                 sop_instance_uid=parsed_header.required_tags.get("SOPInstanceUID", ""),
                 whole_file_sha256=item.raw_object_sha256,
-                pixel_digest=None,  # Would need pixel extraction
+                pixel_digest=parsed_header.pixel_digest,  # C1 fix: pixel digest for content duplicate detection
                 ingestion_item_id=item.id,
             )
 
@@ -399,6 +401,7 @@ class CanonicalPersistenceService:
         result: PersistenceResult,
         instance_id: int,
         observation_id: int,
+        binding_context: Optional[Any] = None,
     ) -> None:
         """Execute C4 binding policy creation.
 
@@ -406,6 +409,7 @@ class CanonicalPersistenceService:
             result: Persistence result to populate
             instance_id: The instance ID
             observation_id: The observation ID
+            binding_context: Optional BindingContext with project_id/user_id
         """
         try:
             from dicom_ingestion.models.binding_policy import BindingContext
@@ -414,22 +418,41 @@ class CanonicalPersistenceService:
             if bind_service is None:
                 return
 
-            # Create binding record (binding execution happens separately)
-            ctx = BindingContext(
-                project_id="",  # To be filled by caller
-                user_id="",     # To be filled by caller
-            )
+            # Handle missing binding context
+            if binding_context is None:
+                # Strategy: Use system default with explicit reason code
+                self._logger.warning(
+                    "Binding context missing for instance %s, using system default",
+                    instance_id
+                )
+                binding_context = BindingContext(
+                    project_id="system_default",
+                    user_id="system",
+                )
+                # Record the fallback strategy in result
+                if result.binding_policy_result is None:
+                    result.binding_policy_result = {}
+                result.binding_policy_result["context_fallback"] = "system_default"
+                result.binding_policy_result["context_fallback_reason"] = "BINDING_CONTEXT_MISSING"
 
             bind_result = await bind_service.create_binding_record(
                 instance_id=instance_id,
                 observation_id=observation_id,
-                context=ctx,
+                context=binding_context,
             )
-            result.binding_policy_result = bind_result.to_dict()
+
+            # Merge binding result with fallback info if any
+            result_dict = bind_result.to_dict()
+            if isinstance(result.binding_policy_result, dict):
+                result_dict.update(result.binding_policy_result)
+            result.binding_policy_result = result_dict
 
             self._logger.debug(
-                "Binding policy created for instance %s: binding_id=%s",
-                instance_id, bind_result.binding_id
+                "Binding policy created for instance %s: binding_id=%s, project=%s, user=%s",
+                instance_id,
+                bind_result.binding_id,
+                binding_context.project_id,
+                binding_context.user_id
             )
 
         except Exception as e:

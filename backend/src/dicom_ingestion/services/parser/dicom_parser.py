@@ -60,6 +60,7 @@ class ParsedDicomHeader:
         required_tags: Dictionary of required tags (e.g., SOPInstanceUID)
         raw_tags: Dictionary of all tags as {tag_name: value}
         private_tags: List of private tags found
+        pixel_digest: Hash of pixel data for content duplicate detection
         is_valid: Whether the header is valid for processing
         parse_errors: List of errors encountered during parsing
         parse_mode: The mode used for parsing
@@ -67,6 +68,7 @@ class ParsedDicomHeader:
     required_tags: Dict[str, Any] = field(default_factory=dict)
     raw_tags: Dict[str, Any] = field(default_factory=dict)
     private_tags: List[PrivateTag] = field(default_factory=list)
+    pixel_digest: Optional[str] = None
     is_valid: bool = True
     parse_errors: List[str] = field(default_factory=list)
     parse_mode: ParseMode = ParseMode.HEADER_ONLY

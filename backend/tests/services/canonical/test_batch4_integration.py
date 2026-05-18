@@ -303,3 +303,164 @@ class TestBatch4ExecutionMethods:
 
         # Error should be recorded
         assert "error" in result.binding_policy_result
+
+
+class TestBindingContextHandling:
+    """Tests for C4 binding context handling (v0.2 P0 fix)."""
+
+    def test_binding_context_missing_uses_system_default(self):
+        """Missing binding context should use system default with reason code."""
+        from unittest.mock import AsyncMock
+        mock_session = MagicMock()
+        mock_store = MagicMock()
+        service = CanonicalPersistenceService(mock_session, mock_store)
+
+        result = PersistenceResult()
+
+        # Mock binding service with AsyncMock
+        mock_bind_service = MagicMock()
+        mock_bind_result = MagicMock()
+        mock_bind_result.binding_id = 100
+        mock_bind_result.to_dict.return_value = {"binding_id": 100}
+        mock_bind_service.create_binding_record = AsyncMock(return_value=mock_bind_result)
+        service._binding_service = mock_bind_service
+
+        # Execute without binding_context
+        import asyncio
+        asyncio.run(service._execute_binding_policy(
+            result=result,
+            instance_id=1,
+            observation_id=2,
+            binding_context=None,
+        ))
+
+        # Should record fallback info
+        assert result.binding_policy_result["context_fallback"] == "system_default"
+        assert result.binding_policy_result["context_fallback_reason"] == "BINDING_CONTEXT_MISSING"
+
+    def test_binding_context_provided_uses_real_values(self):
+        """Provided binding context should use real project_id/user_id."""
+        from unittest.mock import AsyncMock
+        mock_session = MagicMock()
+        mock_store = MagicMock()
+        service = CanonicalPersistenceService(mock_session, mock_store)
+
+        result = PersistenceResult()
+
+        # Mock binding service with AsyncMock
+        mock_bind_service = MagicMock()
+        mock_bind_result = MagicMock()
+        mock_bind_result.binding_id = 101
+        mock_bind_result.to_dict.return_value = {"binding_id": 101}
+        mock_bind_service.create_binding_record = AsyncMock(return_value=mock_bind_result)
+        service._binding_service = mock_bind_service
+
+        # Create real binding context
+        from dicom_ingestion.models.binding_policy import BindingContext
+        ctx = BindingContext(
+            project_id="proj-123",
+            user_id="user-456",
+            dataset_id="ds-789",
+        )
+
+        # Execute with binding_context
+        import asyncio
+        asyncio.run(service._execute_binding_policy(
+            result=result,
+            instance_id=1,
+            observation_id=2,
+            binding_context=ctx,
+        ))
+
+        # Should use provided context
+        assert result.binding_policy_result["binding_id"] == 101
+        # Verify service called with correct context
+        call_args = mock_bind_service.create_binding_record.call_args
+        assert call_args[1]["context"].project_id == "proj-123"
+        assert call_args[1]["context"].user_id == "user-456"
+
+
+class TestPixelDigestHandling:
+    """Tests for C1 pixel digest handling (v0.2 P0 fix)."""
+
+    def test_pixel_digest_passed_to_duplicate_detection(self):
+        """pixel_digest from parsed header should be passed to duplicate detection."""
+        from unittest.mock import AsyncMock
+        mock_session = MagicMock()
+        mock_store = MagicMock()
+        service = CanonicalPersistenceService(mock_session, mock_store)
+
+        result = PersistenceResult()
+
+        # Mock duplicate service with AsyncMock
+        mock_dup_service = MagicMock()
+        mock_dup_result = MagicMock()
+        mock_dup_result.has_duplicates = False
+        mock_dup_result.to_dict.return_value = {"has_duplicates": False}
+        mock_dup_service.check_and_record_duplicates = AsyncMock(return_value=mock_dup_result)
+        service._duplicate_service = mock_dup_service
+
+        # Create parsed header with pixel_digest
+        mock_parsed_header = MagicMock()
+        mock_parsed_header.required_tags = {"SOPInstanceUID": "1.2.3"}
+        mock_parsed_header.pixel_digest = "sha256:pixelhash123"
+
+        # Create mock item
+        mock_item = MagicMock()
+        mock_item.id = 1
+        mock_item.raw_object_sha256 = "sha256:filehash456"
+
+        # Execute duplicate detection
+        import asyncio
+        asyncio.run(service._execute_duplicate_detection(
+            result=result,
+            instance_id=10,
+            observation_id=20,
+            item=mock_item,
+            parsed_header=mock_parsed_header,
+        ))
+
+        # Verify pixel_digest was passed
+        call_args = mock_dup_service.check_and_record_duplicates.call_args
+        assert call_args[0][0].pixel_digest == "sha256:pixelhash123"
+
+    def test_pixel_digest_none_when_not_available(self):
+        """pixel_digest should be None when not available in parsed header."""
+        from unittest.mock import AsyncMock
+        mock_session = MagicMock()
+        mock_store = MagicMock()
+        service = CanonicalPersistenceService(mock_session, mock_store)
+
+        result = PersistenceResult()
+
+        # Mock duplicate service with AsyncMock
+        mock_dup_service = MagicMock()
+        mock_dup_result = MagicMock()
+        mock_dup_result.has_duplicates = False
+        mock_dup_result.to_dict.return_value = {"has_duplicates": False}
+        mock_dup_service.check_and_record_duplicates = AsyncMock(return_value=mock_dup_result)
+        service._duplicate_service = mock_dup_service
+
+        # Create parsed header without pixel_digest (None by default)
+        mock_parsed_header = MagicMock()
+        mock_parsed_header.required_tags = {"SOPInstanceUID": "1.2.3"}
+        mock_parsed_header.pixel_digest = None
+
+        # Create mock item
+        mock_item = MagicMock()
+        mock_item.id = 1
+        mock_item.raw_object_sha256 = "sha256:filehash456"
+
+        # Execute duplicate detection
+        import asyncio
+        asyncio.run(service._execute_duplicate_detection(
+            result=result,
+            instance_id=10,
+            observation_id=20,
+            item=mock_item,
+            parsed_header=mock_parsed_header,
+        ))
+
+        # Verify pixel_digest is None
+        call_args = mock_dup_service.check_and_record_duplicates.call_args
+        assert call_args[0][0].pixel_digest is None
