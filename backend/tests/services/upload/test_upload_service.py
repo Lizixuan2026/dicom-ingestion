@@ -167,6 +167,11 @@ class TestUploadServiceErrorHandling:
         with pytest.raises(ValueError, match="Unsupported input type"):
             upload_service.accept(12345)  # Invalid type
 
+    def test_raises_on_string_input(self, upload_service):
+        """String path input must raise ValueError."""
+        with pytest.raises(ValueError, match="Unsupported input type"):
+            upload_service.accept("fake/path/to/file.dcm")
+
 
 class TestUploadServiceIdempotency:
     """Tests for idempotent storage behavior."""

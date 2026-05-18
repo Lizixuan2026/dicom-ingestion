@@ -7,8 +7,7 @@ with a URI pointing to the stored bytes.
 """
 import hashlib
 from dataclasses import dataclass
-from typing import Union, BinaryIO
-from io import BytesIO
+from typing import BinaryIO
 
 
 class UploadPackageStoreFailed(Exception):
@@ -62,7 +61,7 @@ class UploadService:
 
     def accept(
         self,
-        input_data: Union[bytes, BinaryIO],
+        input_data: bytes | BinaryIO,
         filename: str = "",
         original_filename: str = ""
     ) -> UploadPackage:
@@ -74,7 +73,7 @@ class UploadService:
         with no partial state left.
 
         Args:
-            input_data: Raw bytes or a file-like object containing the upload
+            input_data: Raw bytes or a binary file-like object containing the upload
             filename: Optional identifier for logging/debugging
             original_filename: Original filename from upload (preserved for ZIP files)
 
@@ -83,19 +82,15 @@ class UploadService:
 
         Raises:
             UploadPackageStoreFailed: If storage operation fails
-            ValueError: If input_data is empty or invalid
+            ValueError: If input_data is empty or not bytes/binary file-like
         """
         try:
             # Normalize input to bytes
-            if hasattr(input_data, 'read'):
-                # File-like object
-                data = input_data.read()
-            elif isinstance(input_data, bytes):
+            if isinstance(input_data, bytes):
                 data = input_data
-            elif isinstance(input_data, str):
-                # Handle string paths - read the file
-                with open(input_data, 'rb') as f:
-                    data = f.read()
+            elif hasattr(input_data, "read"):
+                # Binary file-like object
+                data = input_data.read()
             else:
                 raise ValueError(f"Unsupported input type: {type(input_data)}")
 
