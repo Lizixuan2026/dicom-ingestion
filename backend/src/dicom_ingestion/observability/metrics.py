@@ -104,13 +104,13 @@ class Histogram:
 
     @property
     def sum(self) -> float:
-        """Get sum of all observations (no labels)."""
-        return self._data[()]["sum"]
+        """Get sum of all observations across all label combinations."""
+        return sum(data["sum"] for data in self._data.values())
 
     @property
     def count(self) -> int:
-        """Get total count of observations (no labels)."""
-        return self._data[()]["count"]
+        """Get total count of observations across all label combinations."""
+        return sum(data["count"] for data in self._data.values())
 
 
 class MetricsRegistry:
