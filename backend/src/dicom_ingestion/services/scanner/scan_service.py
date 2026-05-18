@@ -263,7 +263,25 @@ class ScanService:
                 manifest.total_bytes_scanned += len(content)
 
                 # Check if nested ZIP
-                if self._is_zip_file(content) and current_depth < max_depth:
+                if self._is_zip_file(content):
+                    if current_depth >= max_depth:
+                        nested_depth = current_depth + 1
+                        error_reason = (
+                            f"ZIP nesting depth {nested_depth} exceeds maximum {max_depth}"
+                        )
+                        manifest.scan_errors.append(
+                            f"Nested ZIP {source_path} failed safety check: {error_reason}"
+                        )
+                        manifest.items.append(ScanItem(
+                            source_path=source_path,
+                            byte_size=len(content),
+                            item_bytes_or_uri=content,
+                            scan_status=ScanStatus.REJECTED_UNSAFE,
+                            error_reason=error_reason,
+                            nested_depth=nested_depth
+                        ))
+                        continue
+
                     # Recursively scan nested ZIP
                     nested_prefix = f"{source_path}/"
                     try:
