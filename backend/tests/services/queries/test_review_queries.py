@@ -213,6 +213,9 @@ class TestReviewQueryServiceJobView:
 
         assert view is not None
         assert view.job_id == 1
+        executed_sql = mock_session.execute.call_args_list[0][0][0]
+        assert "finished_at" in executed_sql
+        assert "completed_at" not in executed_sql
 
     @pytest.mark.asyncio
     async def test_get_job_not_found(self):
@@ -237,13 +240,18 @@ class TestReviewQueryServiceItemView:
         """Should return item view with Batch 4 facts."""
         mock_session = MagicMock()
 
-        # Mock item query
+        # Mock item query — 17 columns matching the new SELECT:
+        # id, job_id, source_path, byte_size, fingerprint,
+        # scan_status, parse_status, storage_status, metadata_persistence_status,
+        # validation_status, binding_status, index_status,
+        # terminal_outcome, error_code, error_detail, created_at, updated_at
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             1, 2, "/test.dcm", 1024, "fp123",
-            {"scan_status": "completed", "parse_status": "completed"},
+            "completed", "completed", "completed", "completed",
+            "completed", "completed", "completed",
             None, None, None,
-            datetime.now(), datetime.now(), None
+            datetime.now(), datetime.now()
         )
 
         # Mock observation query for Batch 4 facts
@@ -293,14 +301,14 @@ class TestReviewQueryServiceQueryItems:
         ids_result = MagicMock()
         ids_result.__iter__ = MagicMock(return_value=iter(ids_rows))
 
-        # Mock item details query - return item with FAILED terminal outcome
-        # This ensures _compute_review_status returns NEEDS_ATTENTION
+        # Mock item query — 17 columns matching the new SELECT
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             1, 2, "/test1.dcm", 1024, "fp1",
-            {"scan_status": "completed", "parse_status": "failed"},  # has_failures will be True
-            "failed", "ParseFailed", "Parse error",  # terminal_outcome = failed -> NEEDS_ATTENTION
-            datetime.now(), datetime.now(), None
+            "completed", "failed", "completed", "completed",
+            "completed", "completed", "completed",
+            "failed", "ParseFailed", "Parse error",
+            datetime.now(), datetime.now()
         )
 
         # Mock observation query returning valid observation for batch4 facts

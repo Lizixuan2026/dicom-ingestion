@@ -8,6 +8,7 @@ ParsedDicomHeader with structured tag information.
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Tuple
 from enum import Enum
+import hashlib
 import io
 
 # Try to import pydicom, handle gracefully if not available
@@ -194,6 +195,11 @@ class DicomParser:
             # Extract private tags
             result.private_tags = self._extract_private_tags(ds)
 
+            # In FULL mode, compute pixel digest from raw pixel data bytes.
+            # HEADER_ONLY mode intentionally skips pixel data; pixel_digest stays None.
+            if self.parse_mode == ParseMode.FULL:
+                result.pixel_digest = self._compute_pixel_digest(ds)
+
             # Check for missing required tags
             missing = result.get_missing_required_tags()
             if missing:
@@ -206,6 +212,40 @@ class DicomParser:
             raise DicomParseFailed(f"Invalid DICOM format: {e}") from e
         except Exception as e:
             raise DicomParseFailed(f"DICOM parsing failed: {e}") from e
+
+    def _compute_pixel_digest(self, ds) -> Optional[str]:
+        """
+        Compute SHA-256 hash of the pixel data bytes.
+
+        Only called in FULL parse mode.  Returns None when no pixel data
+        element is present (e.g. SR, KO, PR objects).
+
+        Args:
+            ds: pydicom Dataset (read without stop_before_pixels)
+
+        Returns:
+            Hex-encoded SHA-256 string, or None
+        """
+        pixel_attr = None
+        for attr in ('PixelData', 'FloatPixelData', 'DoubleFloatPixelData'):
+            if hasattr(ds, attr):
+                pixel_attr = getattr(ds, attr)
+                break
+
+        if pixel_attr is None:
+            return None
+
+        try:
+            raw: bytes
+            if isinstance(pixel_attr, bytes):
+                raw = pixel_attr
+            else:
+                # pydicom may return the value as a RawDataElement or sequence
+                raw = bytes(pixel_attr)
+            return hashlib.sha256(raw).hexdigest()
+        except Exception:
+            # Pixel data unreadable — leave digest as None rather than failing
+            return None
 
     def _extract_required_tags(self, ds) -> Dict[str, Any]:
         """

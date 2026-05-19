@@ -125,12 +125,19 @@ class TestReplayServiceCanReplay:
         mock_session = MagicMock()
         mock_store = MagicMock()
 
-        # Mock item fetch
+        # Mock item fetch — 19 columns matching the new SELECT:
+        # id, job_id, source_path, byte_size, fingerprint,
+        # scan_status, parse_status, storage_status, metadata_persistence_status,
+        # validation_status, binding_status, index_status,
+        # terminal_outcome, storage_uri, raw_object_status,
+        # raw_object_sha256, last_retryable_stage, error_code, error_detail
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             123, 456, "/path/file.dcm", 1024, "fp123",
-            {}, None, "s3://bucket/file", "stored", "sha256:abc",
-            None, None, None, None, None
+            "completed", "completed", "completed", "completed",
+            "completed", "completed", "completed",
+            None, "s3://bucket/file", "stored", "sha256:abc",
+            None, None, None
         )
         mock_session.execute.return_value = item_result
 
@@ -145,12 +152,14 @@ class TestReplayServiceCanReplay:
         mock_session = MagicMock()
         mock_store = MagicMock()
 
-        # Mock item fetch without storage_uri
+        # Mock item fetch without storage_uri — 19 columns
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             123, 456, "/path/file.dcm", 1024, "fp123",
-            {}, None, "", "", "",
-            None, None, None, None, None
+            "completed", "completed", "completed", "completed",
+            "completed", "completed", "completed",
+            None, "", "", "",
+            None, None, None
         )
         mock_session.execute.return_value = item_result
 
@@ -187,14 +196,14 @@ class TestReplayServiceReplay:
         mock_session = MagicMock()
         mock_store = MagicMock()
 
-        # Mock item with failed status
+        # Mock item with failed status — 19 columns matching the new SELECT
         item_result = MagicMock()
         item_result.fetchone.return_value = (
             123, 456, "/path/file.dcm", 1024, "fp123",
-            {"parse_status": "completed", "storage_status": "completed", "metadata_persistence_status": "failed"},
+            "completed", "completed", "completed", "failed",
+            "completed", "completed", "completed",
             "failed", "s3://bucket/file", "stored", "sha256:abc",
-            "metadata_persistence", "MetadataPersistenceFailed", "DB error",
-            None, None
+            "metadata_persistence", "MetadataPersistenceFailed", "DB error"
         )
         mock_session.execute.return_value = item_result
 

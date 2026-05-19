@@ -606,6 +606,11 @@ class ReindexWorkflow:
         self._logger.info("Executing step %s (dry_run=%s)", step.value, dry_run)
 
         try:
+            if dry_run:
+                result.status = "skipped"
+                result.message = f"Would execute {step.value} (dry run)"
+                return result
+
             if step == ReindexStep.VALIDATE:
                 await self._step_validate(job, dry_run, result)
             elif step == ReindexStep.ANALYZE:
