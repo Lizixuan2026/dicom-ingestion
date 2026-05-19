@@ -1,0 +1,106 @@
+# Binding Vocabulary Configuration v2.0
+# Phase 1: 7G - Binding Vocabulary Cleanup
+#
+# 本配置统一术语系统，消除平台绑定与产品绑定概念混淆
+# 实施日期: 2026-05-19
+# 适用范围: DICOM Ingestion Batch 7+8
+
+version: "2.0"
+description: "DICOM摄入系统术语统一规范"
+
+terms:
+  # ────────────────────────────────────────────────────────────────
+  # 核心术语定义
+  # ────────────────────────────────────────────────────────────────
+  
+  platform_binding:
+    # 技术绑定（内部系统使用）
+    alias:
+      - "技术绑定"
+      - "存储绑定"
+      - "内部引用"
+      - "底层绑定"
+    description: |
+      系统内部用于追踪数据存储位置的技术标识。
+      用于关联DICOM实例与存储位置，对用户不可见。
+      包含instance_id, observation_id与存储位置的映射。
+    scope: "内部系统，对用户不可见"
+    used_in:
+      - dicom_binding_policies 表
+      - BindingPolicyService
+      - DicomBindingPolicy 模型
+    
+  product_binding:
+    # 产品绑定（用户可见）
+    alias:
+      - "业务绑定"
+      - "客户绑定"
+      - "应用绑定"
+    description: |
+      面向用户的产品功能，关联数据到具体业务场景。
+      允许用户将DICOM Series/Study关联到项目、数据集样本等平台对象。
+      用户可以通过UI管理和查看这些绑定。
+    scope: "用户可见，可管理"
+    used_in:
+      - 产品UI
+      - 用户API
+      - 业务逻辑层
+    
+  # ────────────────────────────────────────────────────────────────
+  # 已弃用术语（迁移指南）
+  # ────────────────────────────────────────────────────────────────
+  
+  deprecated_terms:
+    - term: "object_binding"
+      reason: "与product_binding概念混淆，含义不清"
+      status: "deprecated"
+      migration: "根据上下文替换为 platform_binding 或 product_binding"
+      removed_in: "v1.2"
+      
+    - term: "instance_binding"
+      reason: "语义过于狭窄，不能表达多种绑定类型"
+      status: "deprecated"
+      migration: "使用 platform_binding 替代"
+      removed_in: "v1.2"
+      
+    - term: "asset_binding"
+      reason: "过度指定目标类型，应支持多种绑定目标"
+      status: "deprecated"
+      migration: "使用 platform_binding + target_type 字段"
+      removed_in: "v1.2"
+
+# ────────────────────────────────────────────────────────────────
+# 绑定状态定义
+# ────────────────────────────────────────────────────────────────
+
+binding_status:
+  platform_binding_states:
+    - PENDING: "等待绑定"
+    - IN_PROGRESS: "绑定进行中"
+    - BOUND: "已成功绑定"
+    - FAILED: "绑定失败"
+    - DEFERRED: "绑定延迟"
+    - NOT_APPLICABLE: "不适用绑定"
+    
+  product_binding_states:
+    - ACTIVE: "活跃绑定"
+    - ARCHIVED: "已归档"
+    - HIDDEN: "已隐藏"
+    - REVOKED: "已撤销"
+
+# ────────────────────────────────────────────────────────────────
+# 绑定目标类型
+# ────────────────────────────────────────────────────────────────
+
+binding_target_types:
+  platform_targets:
+    - ASSET: "平台Asset对象"
+    - DATASET_SAMPLE: "数据集样本"
+    - ANNOTATION: "标注对象"
+    - PROJECT: "项目级绑定"
+    - STUDY: "Study级绑定"
+    
+  product_targets:
+    - PROJECT_VIEW: "项目视图"
+    - DATASET_COLLECTION: "数据集集合"
+    - PATIENT_RECORD: "患者记录"
