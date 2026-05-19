@@ -169,10 +169,19 @@ class LocalNASStorageBackend(StorageBackend):
         if len(str_path) <= self.max_path_length:
             return path
 
-        parts = list(path.parts)
+        # P1-1: 分离 base 和相对路径，只缩短相对部分
+        try:
+            relative = path.relative_to(self.base_path)
+            base_parts = []
+            relative_parts = list(relative.parts)
+        except ValueError:
+            # path 不在 base_path 下，整体缩短
+            base_parts = []
+            relative_parts = list(path.parts)
+
         original_len = len(str_path)
 
-        # P1-1: 迭代式缩短 - 按优先级逐步缩短
+        # P1-1: 迭代式缩短 - 按优先级逐步缩短（只对相对部分）
         shortening_steps = [
             self._shorten_uids_in_parts,
             self._shorten_device_in_parts,
@@ -181,30 +190,31 @@ class LocalNASStorageBackend(StorageBackend):
         ]
 
         for step_func in shortening_steps:
-            parts = step_func(parts)
-            new_path = Path(*parts)
+            relative_parts = step_func(relative_parts)
+            new_relative = Path(*relative_parts)
+            new_path = self.base_path / new_relative
             if len(str(new_path)) <= self.max_path_length:
                 return new_path
 
-        # 如果仍然过长，最终回退
-        return self._ultimate_fallback(parts, original_len)
+        # 如果仍然过长，最终回退（保持相对路径结构）
+        return self.base_path / self._ultimate_fallback(relative_parts, original_len)
 
     def _shorten_uids_in_parts(self, parts: list) -> list:
         """缩短 UID 组件：保留前缀和后缀，中间用哈希替代"""
         if len(parts) < 4:
             return parts
 
-        # 通常 UID 在靠后的部分
-        for i in range(len(parts) - 1, max(0, len(parts) - 4), -1):
+        # P1-1: 检查所有部分（跳过第一层的 DICOM_{modality}）
+        for i in range(1, len(parts)):
             part = parts[i]
-            # 检测 UID 模式（包含点的长字符串）
+            # 检测 UID 模式（包含点的长字符串，且部分数量>=4）
             if '.' in part and len(part) > 20:
                 uid_parts = part.split('.')
                 if len(uid_parts) >= 4:
-                    # 保留前2段和后2段，中间用短哈希
+                    # 保留前2段和后2段，中间用短哈希（使用 _H_ 避免 .. 被误解为路径遍历）
                     middle_hash = self._hash_string(part)[:8]
-                    shortened = f"{'.'.join(uid_parts[:2])}..{middle_hash}..{'.'.join(uid_parts[-2:])}"
-                    parts[i] = shortened[:32]  # 限制长度
+                    shortened = f"{'.'.join(uid_parts[:2])}_H_{middle_hash}_H_{'.'.join(uid_parts[-2:])}"
+                    parts[i] = shortened[:48]  # 限制长度
 
         return parts
 
@@ -262,7 +272,8 @@ class LocalNASStorageBackend(StorageBackend):
         """最终回退：完整路径哈希（可读性最低但保证有效）"""
         full_hash = self._hash_string('/'.join(parts))[:24]
         # P1-1: 版本化命名 - 包含原始长度信息
-        return Path(f"LONGPATH_{original_len}_{full_hash}")
+        # 保持层级结构：将所有内容放入一个哈希目录
+        return Path("OVERFLOW") / f"{original_len}_{full_hash}"
 
     def _get_unique_path(self, path: Path) -> Path:
         """

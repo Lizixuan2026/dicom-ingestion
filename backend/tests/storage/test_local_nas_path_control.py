@@ -69,10 +69,10 @@ class TestIterativeShortening:
 
         shortened = backend._shorten_uids_in_parts(parts)
 
-        # 缩短后 UID 部分应该包含哈希和片段
+        # 缩短后 UID 部分应该包含哈希和片段（使用 _H_ 分隔符避免路径遍历问题）
         uid_part = shortened[3]
-        assert ".." in uid_part  # 哈希分隔符
-        assert len(uid_part) <= 32
+        assert "_H_" in uid_part  # 哈希分隔符
+        assert len(uid_part) <= 48
 
     def test_iterative_shortening_applies_in_priority_order(self):
         """测试：迭代式缩短按优先级逐步应用"""
@@ -130,8 +130,8 @@ class TestIterativeShortening:
 
         result = backend._ultimate_fallback(extreme_parts, len(str(path)))
 
-        # 应该回退到哈希目录
-        assert result.name.startswith("LONGPATH_")
+        # 应该回退到 OVERFLOW 目录下的哈希路径
+        assert str(result).startswith("OVERFLOW/")
         assert len(str(result)) <= 50
 
 
@@ -256,22 +256,25 @@ class TestIllegalCharacters:
     """P1-1: 非法字符处理测试"""
 
     def test_path_traversal_removed(self, tmp_path):
-        """测试：路径遍历序列被移除"""
-        backend = LocalNASStorageBackend(
-            base_path=str(tmp_path),
-            path_generator=Mock(),
-            create_dirs=False
-        )
+        """测试：路径遍历序列被清理"""
+        from dicom_ingestion.path_generator.local_nas import LocalNASPathGenerator
 
-        # 创建模拟 PathGenerator
-        mock_generator = Mock()
-        mock_generator.generate_path.return_value = "../etc/passwd.dcm"
+        # PathGenerator 应该清理路径遍历
+        generator = LocalNASPathGenerator()
 
-        backend.path_generator = mock_generator
+        tags = {
+            'modality': 'MR',
+            'vendor': 'SIEMENS',
+            'study_uid': '1.2.3',
+            'series_uid': '1.2.3.4',
+            'sop_instance_uid': '../etc/passwd',  # 恶意路径
+        }
 
-        with pytest.raises(StorageError):
-            # 存储应该失败或被清理
-            backend.store("/tmp/fake.dcm", "hint", {})
+        path = generator.generate_path(tags, "test.dcm")
+
+        # 路径遍历应该被移除
+        assert '../' not in path
+        assert '..' not in path
 
 
 class TestNonASCII:

@@ -176,6 +176,9 @@ class SchemaManager:
             self._registry = registry
         elif self._registry is None:
             self._registry = SchemaRegistry()
+
+        # P1-2: 确保 checker 已初始化
+        if self._checker is None:
             self._checker = SchemaCompatibilityChecker()
 
     @classmethod

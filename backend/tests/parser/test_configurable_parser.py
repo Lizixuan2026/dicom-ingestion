@@ -9,6 +9,11 @@ from pathlib import Path
 import tempfile
 import os
 
+from unittest.mock import Mock, MagicMock, patch
+from pathlib import Path
+
+import pytest
+
 from dicom_ingestion.parser.factory import (
     ConfigurableDicomParser,
     DicomParserFactory,
@@ -51,7 +56,7 @@ class TestRequiredTagValidation:
         parser = ConfigurableDicomParser(schema, {})
 
         # Mock pydicom.dcmread
-        with patch('dicom_ingestion.parser.factory.pydicom.dcmread', return_value=mock_ds):
+        with patch('pydicom.dcmread', return_value=mock_ds):
             with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
                 result = parser.parse("/fake/path.dcm")
 
@@ -88,7 +93,7 @@ class TestRequiredTagValidation:
 
         parser = ConfigurableDicomParser(schema, {})
 
-        with patch('dicom_ingestion.parser.factory.pydicom.dcmread', return_value=mock_ds):
+        with patch('pydicom.dcmread', return_value=mock_ds):
             with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
                 result = parser.parse("/fake/path.dcm")
 
@@ -123,7 +128,7 @@ class TestRequiredTagValidation:
 
         parser = ConfigurableDicomParser(schema, {})
 
-        with patch('dicom_ingestion.parser.factory.pydicom.dcmread', return_value=mock_ds):
+        with patch('pydicom.dcmread', return_value=mock_ds):
             with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
                 result = parser.parse("/fake/path.dcm")
 
@@ -170,7 +175,7 @@ class TestOptionalTagHandling:
 
         parser = ConfigurableDicomParser(schema, {})
 
-        with patch('dicom_ingestion.parser.factory.pydicom.dcmread', return_value=mock_ds):
+        with patch('pydicom.dcmread', return_value=mock_ds):
             with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
                 result = parser.parse("/fake/path.dcm")
 
@@ -211,7 +216,7 @@ class TestTransformValidation:
 
         parser = ConfigurableDicomParser(schema, {})
 
-        with patch('dicom_ingestion.parser.factory.pydicom.dcmread', return_value=mock_ds):
+        with patch('pydicom.dcmread', return_value=mock_ds):
             with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
                 result = parser.parse("/fake/path.dcm")
 
@@ -248,7 +253,7 @@ class TestTransformValidation:
 
         parser = ConfigurableDicomParser(schema, {})
 
-        with patch('dicom_ingestion.parser.factory.pydicom.dcmread', return_value=mock_ds):
+        with patch('pydicom.dcmread', return_value=mock_ds):
             with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
                 result = parser.parse("/fake/path.dcm")
 
@@ -301,7 +306,7 @@ class TestPrivateExtractorErrorIsolation:
 
         parser = ConfigurableDicomParser(schema, {"failing_extractor": FailingExtractor})
 
-        with patch('dicom_ingestion.parser.factory.pydicom.dcmread', return_value=mock_ds):
+        with patch('pydicom.dcmread', return_value=mock_ds):
             with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
                 result = parser.parse("/fake/path.dcm")
 

@@ -240,8 +240,9 @@ class LocalNASPathGenerator:
 
         limit = max_len or self.max_component_length
 
-        # 替换文件名非法字符
-        cleaned = re.sub(r'[^A-Za-z0-9.]', '_', uid)
+        # P1-1: 替换文件名非法字符（包括路径遍历字符）
+        cleaned = uid.replace('..', '_')  # 防止路径遍历
+        cleaned = re.sub(r'[^A-Za-z0-9._-]', '_', cleaned)
 
         # P1-1: 限制长度（保留后缀.dcm前的部分）
         return cleaned[:limit]
