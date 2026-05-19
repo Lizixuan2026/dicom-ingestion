@@ -311,6 +311,25 @@ class IngestionItem:
         self.status_axes.index_status = ItemStatusValue.COMPLETED.value
         self.updated_at = datetime.utcnow()
 
+    def close_pending_axes(self, status: str = ItemStatusValue.REJECTED.value) -> None:
+        """Close all still-pending axes to a terminal status.
+
+        Used for terminal-rejected items so they do not appear to have
+        unfinished pipeline stages.
+        """
+        for axis in (
+            "parse_status",
+            "storage_status",
+            "metadata_persistence_status",
+            "validation_status",
+            "binding_status",
+            "index_status",
+        ):
+            current = getattr(self.status_axes, axis)
+            if current == ItemStatusValue.PENDING.value:
+                setattr(self.status_axes, axis, status)
+        self.updated_at = datetime.utcnow()
+
     def set_terminal_outcome(self, outcome: TerminalOutcome, error_code: str = "", error_detail: str = "") -> None:
         """
         Set the terminal outcome for this item.
