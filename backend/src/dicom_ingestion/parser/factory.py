@@ -70,7 +70,7 @@ class DicomParserFactory:
             "description": "默认DICOM标签提取配置",
             "extractors": {
                 "standard": [
-                    {"tag": "(0010,0010)", "alias": "patient_name", "required": True},
+                    {"tag": "(0010,0010)", "alias": "patient_name"},
                     {"tag": "(0010,0020)", "alias": "patient_id"},
                     {"tag": "(0020,000D)", "alias": "study_uid", "required": True},
                     {"tag": "(0020,000E)", "alias": "series_uid", "required": True},

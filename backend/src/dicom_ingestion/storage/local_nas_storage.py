@@ -28,7 +28,8 @@ class LocalNASStorageBackend(StorageBackend):
         path_generator,  # PathGenerator实例
         create_dirs: bool = True,
         copy_mode: bool = True,  # True=复制, False=移动
-        max_path_length: Optional[int] = None
+        max_path_length: Optional[int] = None,
+        storage_root_id: Optional[str] = None
     ):
         """
         初始化本地/NAS存储后端
@@ -45,6 +46,8 @@ class LocalNASStorageBackend(StorageBackend):
         self.copy_mode = copy_mode
         # P1-1: 可配置阈值
         self.max_path_length = max_path_length or self.DEFAULT_MAX_PATH_LENGTH
+        # P1-2: storage root ID 用于生成平台-facing URI，限制为 URI-safe 字符
+        self.storage_root_id = self._validate_storage_root_id(storage_root_id or "default")
 
         if create_dirs:
             self.base_path.mkdir(parents=True, exist_ok=True)
@@ -83,12 +86,13 @@ class LocalNASStorageBackend(StorageBackend):
             new_checksum = self.calculate_checksum(source_path)
             if existing_checksum == new_checksum:
                 # 同一文件，直接返回现有位置
+                relative_path_str = str(full_path.relative_to(self.base_path))
                 return StorageLocation(
                     mode=StorageMode.LOCAL_NAS,
-                    uri=f"file://{full_path.absolute()}",
-                    path=str(full_path.relative_to(self.base_path)),
+                    uri=f"local-nas://{self.storage_root_id}/{relative_path_str}",
+                    path=relative_path_str,
                     bucket=None,
-                    metadata={"original_hint": destination_hint, **(metadata or {})},
+                    metadata={"original_hint": destination_hint, "_internal_absolute_path": str(full_path.absolute()), **(metadata or {})},
                     checksum=existing_checksum
                 )
             else:
@@ -104,16 +108,18 @@ class LocalNASStorageBackend(StorageBackend):
         # 计算校验和
         checksum = self.calculate_checksum(str(full_path))
 
-        # 构建URI
-        uri = f"file://{full_path.absolute()}"
+        # P1-2: 构建平台-facing URI（不暴露绝对路径）
+        relative_path_str = str(full_path.relative_to(self.base_path))
+        uri = f"local-nas://{self.storage_root_id}/{relative_path_str}"
 
         return StorageLocation(
             mode=StorageMode.LOCAL_NAS,
             uri=uri,
-            path=str(full_path.relative_to(self.base_path)),
+            path=relative_path_str,
             bucket=None,
             metadata={
                 "original_hint": destination_hint,
+                "_internal_absolute_path": str(full_path.absolute()),
                 **(metadata or {})
             },
             checksum=checksum
@@ -172,14 +178,24 @@ class LocalNASStorageBackend(StorageBackend):
         # P1-1: 分离 base 和相对路径，只缩短相对部分
         try:
             relative = path.relative_to(self.base_path)
-            base_parts = []
             relative_parts = list(relative.parts)
         except ValueError:
             # path 不在 base_path 下，整体缩短
-            base_parts = []
             relative_parts = list(path.parts)
 
         original_len = len(str_path)
+
+        # P1-1: 计算可用的相对路径 budget（base_path + 分隔符已占用）
+        base_str = str(self.base_path)
+        available_budget = self.max_path_length - len(base_str) - 1  # -1 for separator
+        MIN_RELATIVE_LEN = 20  # 最小合法相对路径长度，如 OVERFLOW/123_abc.dcm
+
+        if available_budget < MIN_RELATIVE_LEN:
+            raise StorageError(
+                f"Base path too long for max_path_length: base_path={len(base_str)} chars, "
+                f"max_path_length={self.max_path_length}, available for relative path={available_budget}. "
+                f"Consider using a shorter base_path or increasing max_path_length."
+            )
 
         # P1-1: 迭代式缩短 - 按优先级逐步缩短（只对相对部分）
         shortening_steps = [
@@ -196,8 +212,8 @@ class LocalNASStorageBackend(StorageBackend):
             if len(str(new_path)) <= self.max_path_length:
                 return new_path
 
-        # 如果仍然过长，最终回退（保持相对路径结构）
-        return self.base_path / self._ultimate_fallback(relative_parts, original_len)
+        # 如果仍然过长，最终回退（在可用 budget 内生成）
+        return self.base_path / self._ultimate_fallback(relative_parts, original_len, available_budget)
 
     def _shorten_uids_in_parts(self, parts: list) -> list:
         """缩短 UID 组件：保留前缀和后缀，中间用哈希替代"""
@@ -268,12 +284,24 @@ class LocalNASStorageBackend(StorageBackend):
 
         return parts[:2] + [f"CONT_{hash_value}"]
 
-    def _ultimate_fallback(self, parts: list, original_len: int) -> Path:
+    def _ultimate_fallback(self, parts: list, original_len: int, max_relative_len: int) -> Path:
         """最终回退：完整路径哈希（可读性最低但保证有效）"""
         full_hash = self._hash_string('/'.join(parts))[:24]
-        # P1-1: 版本化命名 - 包含原始长度信息
-        # 保持层级结构：将所有内容放入一个哈希目录
-        return Path("OVERFLOW") / f"{original_len}_{full_hash}"
+        # P1-1: 尝试不同长度的 hash，直到 fit 进可用 budget
+        for hash_len in [24, 16, 12, 8]:
+            result = Path("OVERFLOW") / f"{original_len}_{full_hash[:hash_len]}"
+            if len(str(result)) <= max_relative_len:
+                return result
+
+        # 如果连最短 hash 都 fit 不了，只用 hash 本身（不带 original_len）
+        for hash_len in [8, 4]:
+            result = Path("OVERFLOW") / full_hash[:hash_len]
+            if len(str(result)) <= max_relative_len:
+                return result
+
+        raise StorageError(
+            f"Cannot generate a fallback path within budget: max_relative_len={max_relative_len}"
+        )
 
     def _get_unique_path(self, path: Path) -> Path:
         """
@@ -311,6 +339,15 @@ class LocalNASStorageBackend(StorageBackend):
         stem = base_path.stem
         suffix = base_path.suffix
         return base_path.parent / f"{stem}_v{version:03d}{suffix}"
+
+    def _validate_storage_root_id(self, value: str) -> str:
+        """校验 storage_root_id 只包含 URI-safe 字符 [A-Za-z0-9_-]+"""
+        import re
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', value):
+            raise ValueError(
+                f"storage_root_id must match [A-Za-z0-9_-]+, got: {value!r}"
+            )
+        return value
 
     def _hash_string(self, s: str) -> str:
         """计算字符串哈希"""

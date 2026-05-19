@@ -200,7 +200,7 @@ class SchemaManager:
             description="初始Schema",
             extractors={
                 "standard": [
-                    {"tag": "(0010,0010)", "alias": "patient_name", "required": True},
+                    {"tag": "(0010,0010)", "alias": "patient_name"},
                     {"tag": "(0010,0020)", "alias": "patient_id"},
                     {"tag": "(0020,000D)", "alias": "study_uid", "required": True},
                     {"tag": "(0020,000E)", "alias": "series_uid", "required": True},
@@ -208,8 +208,8 @@ class SchemaManager:
                     {"tag": "(0008,0060)", "alias": "modality", "required": True},
                 ]
             },
-            required_fields={"patient_name", "study_uid", "series_uid", "sop_instance_uid", "modality"},
-            optional_fields={"patient_id"}
+            required_fields={"study_uid", "series_uid", "sop_instance_uid", "modality"},
+            optional_fields={"patient_name", "patient_id"}
         )
 
         # Schema 1.1.0 - 新增可选字段
@@ -219,7 +219,7 @@ class SchemaManager:
             description="新增可选字段",
             extractors={
                 "standard": [
-                    {"tag": "(0010,0010)", "alias": "patient_name", "required": True},
+                    {"tag": "(0010,0010)", "alias": "patient_name"},
                     {"tag": "(0010,0020)", "alias": "patient_id"},
                     {"tag": "(0020,000D)", "alias": "study_uid", "required": True},
                     {"tag": "(0020,000E)", "alias": "series_uid", "required": True},
@@ -228,8 +228,8 @@ class SchemaManager:
                     {"tag": "(0008,0070)", "alias": "manufacturer"},  # 新增可选
                 ]
             },
-            required_fields={"patient_name", "study_uid", "series_uid", "sop_instance_uid", "modality"},
-            optional_fields={"patient_id", "manufacturer"}  # manufacturer 新增
+            required_fields={"study_uid", "series_uid", "sop_instance_uid", "modality"},
+            optional_fields={"patient_name", "patient_id", "manufacturer"}  # manufacturer 新增
         )
 
         # Schema 1.2.0 - 新增 required 字段（需要重解析）
@@ -239,7 +239,7 @@ class SchemaManager:
             description="新增 required 字段 device_serial",
             extractors={
                 "standard": [
-                    {"tag": "(0010,0010)", "alias": "patient_name", "required": True},
+                    {"tag": "(0010,0010)", "alias": "patient_name"},
                     {"tag": "(0010,0020)", "alias": "patient_id"},
                     {"tag": "(0020,000D)", "alias": "study_uid", "required": True},
                     {"tag": "(0020,000E)", "alias": "series_uid", "required": True},
@@ -249,8 +249,8 @@ class SchemaManager:
                     {"tag": "(0018,1000)", "alias": "device_serial", "required": True},  # 新增 required
                 ]
             },
-            required_fields={"patient_name", "study_uid", "series_uid", "sop_instance_uid", "modality", "device_serial"},
-            optional_fields={"patient_id", "manufacturer"}
+            required_fields={"study_uid", "series_uid", "sop_instance_uid", "modality", "device_serial"},
+            optional_fields={"patient_name", "patient_id", "manufacturer"}
         )
 
         # Schema 2.0.0 - 主版本变更（不兼容）
@@ -260,15 +260,15 @@ class SchemaManager:
             description="主版本重构",
             extractors={
                 "standard": [
-                    {"tag": "(0010,0010)", "alias": "patient_name", "required": True},
+                    {"tag": "(0010,0010)", "alias": "patient_name"},
                     {"tag": "(0020,000D)", "alias": "study_uid", "required": True},
                     {"tag": "(0020,000E)", "alias": "series_uid", "required": True},
                     {"tag": "(0008,0018)", "alias": "sop_instance_uid", "required": True},
                     {"tag": "(0008,0060)", "alias": "modality", "required": True},
                 ]
             },
-            required_fields={"patient_name", "study_uid", "series_uid", "sop_instance_uid", "modality"},
-            optional_fields=set()
+            required_fields={"study_uid", "series_uid", "sop_instance_uid", "modality"},
+            optional_fields={"patient_name"}
         )
 
         # 注册所有 schema
