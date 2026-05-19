@@ -6,6 +6,7 @@ __pycache__/
 
 # Virtual environment
 backend/venv/
+backend/.site-packages/
 
 # IDE and OS
 .DS_Store

@@ -9,10 +9,13 @@ from pathlib import Path
 import tempfile
 import os
 
-from unittest.mock import Mock, MagicMock, patch
-from pathlib import Path
-
-import pytest
+# P1-2: 统一 pydicom 依赖策略 - 缺少时跳过测试
+try:
+    import pydicom
+    HAS_PYDICOM = True
+except ImportError:
+    HAS_PYDICOM = False
+    pydicom = None
 
 from dicom_ingestion.parser.factory import (
     ConfigurableDicomParser,
@@ -21,6 +24,9 @@ from dicom_ingestion.parser.factory import (
     ParseError,
 )
 from dicom_ingestion.parser.tag_extractors.base import TagExtractor
+
+
+pytestmark = pytest.mark.skipif(not HAS_PYDICOM, reason="pydicom not installed")
 
 
 class TestRequiredTagValidation:
