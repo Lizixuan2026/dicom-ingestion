@@ -145,12 +145,24 @@ class Batch7PipelineScheduler:
             source_path=source_item.original_relative_path,
             byte_size=source_item.size_bytes,
             item_fingerprint=hashlib.sha256(fingerprint_input.encode()).hexdigest(),
-            metadata={"source_kind": source_item.source_kind},
+            metadata={
+                "source_kind": source_item.source_kind,
+                "annotation_refs": [ref.to_report_dict() for ref in source_item.annotations],
+            },
         )
         item.mark_seen()
         return item
 
     def _process_item(self, item: IngestionItem, source_item: IngestSourceItem) -> None:
+        missing_required = source_item.metadata.get("missing_required_annotations") or []
+        if missing_required:
+            detail = ", ".join(str(label) for label in missing_required)
+            item.mark_scanned(False, "RequiredAnnotationMissing")
+            item.error_detail = detail
+            item.set_terminal_outcome(TerminalOutcome.REJECTED, "RequiredAnnotationMissing", detail)
+            item.close_pending_axes()
+            return
+
         try:
             data = source_item.open_bytes()
         except Exception as exc:

@@ -17,6 +17,27 @@ class SourceKind(str, Enum):
     LOCAL_FOLDER = "local_folder"
     FILE_LIST_MANIFEST = "file_list_manifest"
     ZIP = "zip"
+    CURATED_MANIFEST = "curated_manifest"
+
+
+@dataclass(frozen=True)
+class AnnotationRef:
+    """Reference to an annotation payload related to a data sample (source layer only)."""
+
+    source_relative_path: str
+    task_type: str | None = None
+    label_name: str | None = None
+    required: bool = False
+    status: str = "referenced"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_report_dict(self) -> dict[str, Any]:
+        return {
+            "source_relative_path": self.source_relative_path,
+            "task_type": self.task_type,
+            "label_name": self.label_name,
+            "status": self.status,
+        }
 
 
 @dataclass(frozen=True)
@@ -28,6 +49,7 @@ class IngestSourceItem:
     size_bytes: int
     open_bytes: Callable[[], bytes]
     metadata: dict[str, Any] = field(default_factory=dict)
+    annotations: list[AnnotationRef] = field(default_factory=list)
 
     @property
     def local_path(self) -> Optional[Path]:

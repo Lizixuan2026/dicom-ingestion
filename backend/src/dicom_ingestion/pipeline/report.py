@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from collections import Counter
+
 from dicom_ingestion.models.ingestion_item import IngestionItem, TerminalOutcome
 from dicom_ingestion.models.ingestion_job import IngestionJob
 
@@ -25,6 +27,7 @@ class Batch7IngestReport:
     rejections: list[dict[str, Any]] = field(default_factory=list)
     failed_tasks: list[dict[str, Any]] = field(default_factory=list)
     items: list[dict[str, Any]] = field(default_factory=list)
+    annotation_summary: dict[str, Any] = field(default_factory=dict)
     generated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
     def to_dict(self) -> dict[str, Any]:
@@ -32,6 +35,7 @@ class Batch7IngestReport:
             "ingest_id": self.ingest_id,
             "source": self.source,
             "summary": self.summary,
+            "annotation_summary": self.annotation_summary,
             "storage": self.storage,
             "fallbacks": self.fallbacks,
             "rejections": self.rejections,
@@ -69,6 +73,7 @@ class Batch7ReportBuilder:
         object_count = sum(1 for uri in storage_uris if uri.startswith("s3://"))
         fallback_counts = self._fallback_counts(items)
 
+        annotation_summary = self._build_annotation_summary(items)
         report_items = []
         for item in items:
             full_tags = item.metadata.get("parsed_tags", {})
@@ -79,6 +84,7 @@ class Batch7ReportBuilder:
                 "sop_instance_uid": full_tags.get("sop_instance_uid", ""),
                 "modality": full_tags.get("modality", ""),
             }
+            annotation_refs = sanitize_for_report(item.metadata.get("annotation_refs", []))
             report_items.append(
                 {
                     "item_id": item.id,
@@ -89,6 +95,7 @@ class Batch7ReportBuilder:
                     "storage_uri": item.storage_uri,
                     "status_axes": item.status_axes.to_dict(),
                     "dicom_identity": sanitize_for_report(dicom_identity),
+                    "annotation_refs": annotation_refs,
                 }
             )
 
@@ -125,7 +132,31 @@ class Batch7ReportBuilder:
                 for item in failed
             ],
             items=report_items,
+            annotation_summary=annotation_summary,
         )
+
+    def _build_annotation_summary(self, items: list[IngestionItem]) -> dict[str, Any]:
+        task_type_counts: Counter[str] = Counter()
+        referenced_items = 0
+        items_with_annotations = 0
+        items_missing_required = 0
+        for item in items:
+            refs = item.metadata.get("annotation_refs", [])
+            if refs:
+                items_with_annotations += 1
+            referenced_items += len(refs)
+            for ref in refs:
+                task_type = ref.get("task_type")
+                if task_type:
+                    task_type_counts[str(task_type)] += 1
+            if item.error_code == "RequiredAnnotationMissing":
+                items_missing_required += 1
+        return {
+            "referenced_items": referenced_items,
+            "items_with_annotations": items_with_annotations,
+            "items_missing_required_annotations": items_missing_required,
+            "task_type_counts": dict(sorted(task_type_counts.items())),
+        }
 
     def _fallback_counts(self, items: list[IngestionItem]) -> dict[tuple[str, str], int]:
         counts: dict[tuple[str, str], int] = {}
