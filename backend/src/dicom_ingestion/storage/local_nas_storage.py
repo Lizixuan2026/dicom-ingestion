@@ -15,14 +15,20 @@ class LocalNASStorageBackend(StorageBackend):
     """
     本地/NAS存储后端
     支持层级路径，保持人可读
+
+    P1-1: 可配置路径长度阈值，默认保守设置 (240-255)
     """
+
+    # P1-1: 默认保守路径长度限制（Windows/NAS 兼容）
+    DEFAULT_MAX_PATH_LENGTH = 240
 
     def __init__(
         self,
         base_path: str,
         path_generator,  # PathGenerator实例
         create_dirs: bool = True,
-        copy_mode: bool = True  # True=复制, False=移动
+        copy_mode: bool = True,  # True=复制, False=移动
+        max_path_length: Optional[int] = None
     ):
         """
         初始化本地/NAS存储后端
@@ -32,10 +38,13 @@ class LocalNASStorageBackend(StorageBackend):
             path_generator: 路径生成器实例
             create_dirs: 是否自动创建目录
             copy_mode: 是否使用复制模式（False为移动模式）
+            max_path_length: 路径长度限制（默认240，建议240-255）
         """
         self.base_path = Path(base_path)
         self.path_generator = path_generator
         self.copy_mode = copy_mode
+        # P1-1: 可配置阈值
+        self.max_path_length = max_path_length or self.DEFAULT_MAX_PATH_LENGTH
 
         if create_dirs:
             self.base_path.mkdir(parents=True, exist_ok=True)
@@ -50,17 +59,18 @@ class LocalNASStorageBackend(StorageBackend):
         存储到本地/NAS
         使用层级路径: DICOM_{MODALITY}/{VENDOR}/{DEVICE}/{StudyUID}/{MeasUID}/{SeriesUID}/{SOP}.dcm
 
-        决策 Gap-1: 路径长度限制处理
+        P1-1: 路径长度控制 - Generator 负责组件级，Storage 负责完整路径级
         """
         source = Path(source_path)
 
-        # 使用path_generator生成层级路径
+        # Step 1: Generator 生成层级路径（组件级长度控制）
         relative_path = self.path_generator.generate_path(
             dicom_tags=metadata or {},
             original_filename=source.name
         )
 
-        # 检查路径长度限制 (决策 Gap-1)
+        # Step 2: Storage 确保完整路径长度（完整路径级控制）
+        # P1-1: 可配置阈值，默认240字符（Windows/NAS 兼容）
         full_path = self._ensure_path_length(self.base_path / relative_path)
 
         # 确保目录存在
@@ -144,36 +154,123 @@ class LocalNASStorageBackend(StorageBackend):
             "mode": stat.st_mode
         }
 
-    def _ensure_path_length(self, path: Path, max_length: int = 4096) -> Path:
+    def _ensure_path_length(self, path: Path) -> Path:
         """
         确保路径长度不超过限制
-        决策 Gap-1: 路径长度限制处理
+
+        P1-1: 迭代式路径缩短策略（替代递归，更稳定可控）
+        策略优先级：
+        1. 缩短 UID 组件（保留前8+后8字符）
+        2. 缩短设备名（使用哈希后缀）
+        3. 缩短 vendor（使用缩写）
+        4. 最终回退：完整哈希目录
         """
         str_path = str(path)
-        if len(str_path) <= max_length:
+        if len(str_path) <= self.max_path_length:
             return path
 
-        # 路径过长，使用哈希缩短
-        # 保留基础层级，对最深层使用哈希
-        parts = path.parts
-        if len(parts) > 4:
-            # 对最后几个部分使用哈希
-            to_hash = '/'.join(parts[-3:])
-            hash_suffix = self._hash_string(to_hash)[:16]
-            new_parts = parts[:-3] + (f"HASH_{hash_suffix}",)
-            new_path = Path(*new_parts)
+        parts = list(path.parts)
+        original_len = len(str_path)
 
-            # 递归检查
-            if len(str(new_path)) > max_length:
-                # 仍然过长，进一步缩短
-                return self._ensure_path_length(new_path, max_length)
-            return new_path
+        # P1-1: 迭代式缩短 - 按优先级逐步缩短
+        shortening_steps = [
+            self._shorten_uids_in_parts,
+            self._shorten_device_in_parts,
+            self._shorten_vendor_in_parts,
+            self._fallback_to_hash_structure,
+        ]
 
-        # 无法进一步缩短
-        return path
+        for step_func in shortening_steps:
+            parts = step_func(parts)
+            new_path = Path(*parts)
+            if len(str(new_path)) <= self.max_path_length:
+                return new_path
+
+        # 如果仍然过长，最终回退
+        return self._ultimate_fallback(parts, original_len)
+
+    def _shorten_uids_in_parts(self, parts: list) -> list:
+        """缩短 UID 组件：保留前缀和后缀，中间用哈希替代"""
+        if len(parts) < 4:
+            return parts
+
+        # 通常 UID 在靠后的部分
+        for i in range(len(parts) - 1, max(0, len(parts) - 4), -1):
+            part = parts[i]
+            # 检测 UID 模式（包含点的长字符串）
+            if '.' in part and len(part) > 20:
+                uid_parts = part.split('.')
+                if len(uid_parts) >= 4:
+                    # 保留前2段和后2段，中间用短哈希
+                    middle_hash = self._hash_string(part)[:8]
+                    shortened = f"{'.'.join(uid_parts[:2])}..{middle_hash}..{'.'.join(uid_parts[-2:])}"
+                    parts[i] = shortened[:32]  # 限制长度
+
+        return parts
+
+    def _shorten_device_in_parts(self, parts: list) -> list:
+        """缩短设备名组件"""
+        if len(parts) < 3:
+            return parts
+
+        # 设备名通常在 vendor 后面
+        for i, part in enumerate(parts):
+            if len(part) > 32 and i > 0 and i < len(parts) - 2:
+                # 对长设备名使用哈希后缀
+                hash_suffix = self._hash_string(part)[:8]
+                parts[i] = f"DEV_{hash_suffix}"
+                break
+
+        return parts
+
+    def _shorten_vendor_in_parts(self, parts: list) -> list:
+        """缩短 vendor 名称（使用标准缩写）"""
+        VENDOR_ABBREV = {
+            'SIEMENS': 'SIEM',
+            'GE': 'GE',
+            'PHILIPS': 'PHIL',
+            'UIH': 'UIH',
+            'CANON': 'CAN',
+            'HITACHI': 'HIT',
+            'AGFA': 'AGF',
+            'CARESTREAM': 'CS',
+            'FUJIFILM': 'FUJI',
+            'GENERIC': 'GEN',
+        }
+
+        for i, part in enumerate(parts):
+            upper_part = part.upper()
+            for full, abbrev in VENDOR_ABBREV.items():
+                if full in upper_part:
+                    parts[i] = abbrev
+                    break
+
+        return parts
+
+    def _fallback_to_hash_structure(self, parts: list) -> list:
+        """回退到哈希结构：保留顶层，下层用哈希"""
+        if len(parts) < 4:
+            return parts
+
+        # 保留前2层，其余用哈希表示
+        to_hash = '/'.join(parts[2:])
+        hash_value = self._hash_string(to_hash)[:16]
+
+        return parts[:2] + [f"CONT_{hash_value}"]
+
+    def _ultimate_fallback(self, parts: list, original_len: int) -> Path:
+        """最终回退：完整路径哈希（可读性最低但保证有效）"""
+        full_hash = self._hash_string('/'.join(parts))[:24]
+        # P1-1: 版本化命名 - 包含原始长度信息
+        return Path(f"LONGPATH_{original_len}_{full_hash}")
 
     def _get_unique_path(self, path: Path) -> Path:
-        """获取唯一路径（添加序号）"""
+        """
+        获取唯一路径（版本化命名规则）
+
+        P1-1: 版本化命名格式: {stem}_v{counter}{suffix}
+        与原文件区分：同名但不同内容的文件使用 v1, v2, v3... 后缀
+        """
         if not path.exists():
             return path
 
@@ -181,14 +278,28 @@ class LocalNASStorageBackend(StorageBackend):
         stem = path.stem
         suffix = path.suffix
 
-        counter = 1
-        while True:
-            new_path = parent / f"{stem}_{counter:03d}{suffix}"
+        # P1-1: 版本化命名 - v1, v2, v3...
+        for version in range(1, 10000):
+            # 格式: filename_v001.dcm
+            new_path = parent / f"{stem}_v{version:03d}{suffix}"
             if not new_path.exists():
                 return new_path
-            counter += 1
-            if counter > 999:
-                raise StorageError(f"Cannot find unique path for: {path}")
+
+        raise StorageError(f"Cannot find unique path for: {path} (exhausted v1-9999)")
+
+    def get_versioned_path(self, location: StorageLocation, version: int) -> Path:
+        """
+        获取指定版本的路径（用于访问历史版本）
+
+        P1-1: 支持版本化文件访问
+        """
+        base_path = self.base_path / location.path
+        if version == 0:
+            return base_path
+
+        stem = base_path.stem
+        suffix = base_path.suffix
+        return base_path.parent / f"{stem}_v{version:03d}{suffix}"
 
     def _hash_string(self, s: str) -> str:
         """计算字符串哈希"""

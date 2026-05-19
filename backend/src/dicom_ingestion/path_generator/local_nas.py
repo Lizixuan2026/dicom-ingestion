@@ -2,6 +2,8 @@
 Local/NAS Path Generator
 
 生成人可读的层级路径: DICOM_{MODALITY}/{VENDOR}/{DEVICE}/{StudyUID}/{MeasUID}/{SeriesUID}/{SOP}.dcm
+
+P1-1: 与 Storage 层统一长度职责
 """
 import re
 import hashlib
@@ -25,6 +27,10 @@ class LocalNASPathGenerator:
     """
     本地/NAS层级路径生成器
     生成人可读的DICOM存储路径
+
+    P1-1: 与 Storage 层统一长度职责
+    - Generator 负责组件级长度控制（单个组件不超限制）
+    - Storage 负责完整路径长度控制（处理超长路径回退）
     """
 
     # 路径模板
@@ -52,14 +58,18 @@ class LocalNASPathGenerator:
         'FUJIFILM': ['FUJIFILM', 'FUJIFILM MEDICAL', 'FUJI'],
     }
 
-    def __init__(self, max_component_length: int = 64):
+    # P1-1: 组件长度限制（与 Storage 层协调）
+    DEFAULT_MAX_COMPONENT_LENGTH = 48  # 保守值，确保完整路径不超 240
+
+    def __init__(self, max_component_length: Optional[int] = None):
         """
         初始化路径生成器
 
         Args:
-            max_component_length: 路径组件最大长度
+            max_component_length: 路径组件最大长度（默认48，建议32-64）
+                                 完整路径限制由 Storage 层处理
         """
-        self.max_length = max_component_length
+        self.max_component_length = max_component_length or self.DEFAULT_MAX_COMPONENT_LENGTH
 
     def generate_path(self, dicom_tags: Dict, original_filename: str) -> str:
         """
@@ -139,31 +149,38 @@ class LocalNASPathGenerator:
         )
 
     def _clean_components(self, components: PathComponents) -> PathComponents:
-        """清理路径组件"""
-        # 清理Modality
+        """
+        清理路径组件
+
+        P1-1: 所有组件应用 max_component_length 限制
+        """
+        max_len = self.max_component_length
+
+        # 清理Modality (较短，固定8字符)
         modality = components.modality or self.DEFAULTS['modality']
-        modality = re.sub(r'[^A-Z0-9]', '', modality)[:8]  # 只允许字母数字
+        modality = re.sub(r'[^A-Z0-9]', '', modality)[:8]
 
         # 清理Vendor - 映射到标准名称
         vendor = self._normalize_vendor(components.vendor)
-        vendor = re.sub(r'[^A-Za-z0-9_-]', '_', vendor)[:32]
+        vendor = re.sub(r'[^A-Za-z0-9_-]', '_', vendor)[:min(16, max_len)]
 
         # 清理Device
         device = None
         if components.device:
             device = str(components.device)
-            device = re.sub(r'[^A-Za-z0-9_-]', '_', device)[:32]
+            device = re.sub(r'[^A-Za-z0-9_-]', '_', device)[:max_len]
 
-        # 截断UIDs
-        study_uid = self._truncate_uid(components.study_uid, 16)
-        series_uid = self._truncate_uid(components.series_uid, 16)
-        sop_uid = self._sanitize_sop_uid(components.sop_uid)
+        # P1-1: 截断UIDs - 使用配置的组件长度限制
+        uid_limit = min(32, max_len)  # UID 可稍长但仍受限
+        study_uid = self._truncate_uid(components.study_uid, uid_limit)
+        series_uid = self._truncate_uid(components.series_uid, uid_limit)
+        sop_uid = self._sanitize_sop_uid(components.sop_uid, max_len)
 
         # MeasUID - 优先使用，需要清理
         meas_uid = None
         if components.meas_uid:
             meas_uid = str(components.meas_uid)
-            meas_uid = re.sub(r'[^A-Za-z0-9_-]', '_', meas_uid)[:64]
+            meas_uid = re.sub(r'[^A-Za-z0-9_-]', '_', meas_uid)[:max_len]
 
         return PathComponents(
             modality=modality,
@@ -190,10 +207,16 @@ class LocalNASPathGenerator:
         # 未匹配到，返回清理后的原始值
         return vendor.upper()[:32]
 
-    def _truncate_uid(self, uid: str, length: int) -> str:
-        """截断UID，保留识别性"""
+    def _truncate_uid(self, uid: str, length: Optional[int] = None) -> str:
+        """
+        截断UID，保留识别性
+
+        P1-1: 使用配置的 max_component_length 确保组件不超长
+        """
         if not uid:
             return 'UNKNOWN'
+
+        max_len = length or self.max_component_length
 
         # 使用UID的最后部分，通常更有区分性
         parts = uid.split('.')
@@ -203,18 +226,25 @@ class LocalNASPathGenerator:
         else:
             short = uid
 
-        return short[:length + 10]  # 稍微宽松一点
+        # P1-1: 严格限制长度
+        return short[:max_len]
 
-    def _sanitize_sop_uid(self, uid: str) -> str:
-        """清理SOP UID用于文件名"""
+    def _sanitize_sop_uid(self, uid: str, max_len: Optional[int] = None) -> str:
+        """
+        清理SOP UID用于文件名
+
+        P1-1: 使用配置的组件长度限制
+        """
         if not uid:
             return 'unknown'
+
+        limit = max_len or self.max_component_length
 
         # 替换文件名非法字符
         cleaned = re.sub(r'[^A-Za-z0-9.]', '_', uid)
 
-        # 限制长度
-        return cleaned[:128]
+        # P1-1: 限制长度（保留后缀.dcm前的部分）
+        return cleaned[:limit]
 
     def _sanitize_path(self, path: str) -> str:
         """确保路径安全，移除任何危险字符"""
