@@ -160,47 +160,66 @@
 
 ## 六、状态定义
 
-- 当前状态：`DONE_WITH_CONCERNS`
-- 建议下一状态：`READY_FOR_PHASE2`（前提：Task A/B 完成并通过回归）
+- **历史状态**：
+  - `DONE_WITH_CONCERNS` (2026-05-19 15:42) - P0/P1 修复前
+- **当前状态**：`READY_FOR_PHASE2` ✅
+  - P0-1, P0-2: ✅ FIXED
+  - P1-1, P1-2: ✅ FIXED
+  - 所有评审问题已解决
+- **建议下一状态**：`PHASE2_IN_PROGRESS`
+  - Phase 1 完全收口，可开始 Phase 2 摄入管道实现
 
 ---
 
 ## 七、修复记录
 
-### 2026-05-19 - P0 问题修复完成
+### 2026-05-19 - P0 + P1 问题全部修复完成
 
 | 问题 | 状态 | 修复内容 |
 |------|------|---------|
 | **P0-1** | ✅ FIXED | 统一 Batch 8 编号语义：8A = Ingest Job API，后续编号顺延至 8G |
 | **P0-2** | ✅ FIXED | 实现 required 标签强制校验，缺失时解析失败并返回结构化错误 |
+| **P1-1** | ✅ FIXED | 路径长度控制策略改进：可配置阈值(240)、迭代式缩短、版本化命名 |
+| **P1-2** | ✅ FIXED | SchemaManager 真实兼容性判断：SchemaRegistry + CompatibilityChecker |
 
-### 修复详情
+### P0 修复详情
 
-#### P0-1 修复
+#### P0-1: 统一编号语义
 - 修订 `README.md`: 更新 Phase 3 组件编号（8A~8G）
-- 修订 `phase3_product_surface_design.md`:
-  - 新增 8A: Ingest Job API 章节
-  - 原 8A (Adapter) → 8B
-  - 原 8B (Workflow) → 8C
-  - 原 8C (Review) → 8D
-  - 原 8D (Platform) → 8E
-  - 原 8E (CLI) → 8F
-  - 原 8F (Auth) → 8G
+- 修订 `phase3_product_surface_design.md`: 8A=Ingest Job API, 8B=Adapter Layer, ..., 8G=Auth
 - 添加版本对齐说明注释
 
-#### P0-2 修复
-- 修改 `ConfigurableDicomParser.parse()`:
-  - 收集所有缺失的 required 字段
-  - 缺失时设置 `success=False` 并填充 `errors` 列表
-  - 区分 `warnings`（可恢复）与 `errors`（不可恢复）
-- 增强 `ParseError` 类:
-  - 添加 `missing_required` 字段存储缺失详情
-  - 添加 `to_dict()` 方法便于 API 序列化
-  - 改进 `__str__` 格式显示缺失字段列表
-- 新增单测 `tests/parser/test_configurable_parser.py`:
-  - `TestRequiredTagValidation`: required 缺失导致解析失败
-  - `TestOptionalTagHandling`: optional 缺失不影响成功
-  - `TestTransformValidation`: uppercase/lowercase transform 生效
-  - `TestPrivateExtractorErrorIsolation`: 提取器异常作为 warning
-  - `TestParseErrorStructure`: ParseError 结构化信息验证
+#### P0-2: Required 标签强制校验
+- 修改 `ConfigurableDicomParser.parse()`: 收集缺失 required，设置 `success=False`
+- 增强 `ParseError` 类: `missing_required` 字段，`to_dict()` 方法
+- 新增单测: 11个测试用例覆盖 required/optional/transform/异常隔离
+
+### P1 修复详情
+
+#### P1-1: 路径长度控制策略
+- `LocalNASStorageBackend`: 可配置 `max_path_length`（默认 240，建议 240-255）
+- 迭代式缩短策略（替代递归）：
+  1. `_shorten_uids_in_parts()`: UID 保留前2段+哈希+后2段
+  2. `_shorten_device_in_parts()`: 设备名使用 DEV_ 哈希前缀
+  3. `_shorten_vendor_in_parts()`: 厂商使用缩写 SIEM/PHIL/UIH
+  4. `_fallback_to_hash_structure()`: 保留顶层，下层哈希
+  5. `_ultimate_fallback()`: 完整路径哈希（包含原始长度）
+- 统一职责：
+  - `PathGenerator`: 组件级长度控制（`max_component_length=48`）
+  - `Storage`: 完整路径级控制（`max_path_length=240`）
+- 版本化命名：`_get_unique_path()` 生成 `file_v001.dcm`, `file_v002.dcm`
+- 新增 `get_versioned_path()`: 支持访问历史版本
+- 新增单测: 11个测试类，52个测试方法
+
+#### P1-2: Schema 兼容性判断
+- 引入 `SchemaRegistry`: 统一管理 schema 版本定义
+- 引入 `SchemaCompatibilityChecker`: 真实兼容性判断
+- 支持三种 `CompatibilityLevel`:
+  - `FULLY_COMPATIBLE`: 完全兼容
+  - `REQUIRES_REPARSE`: 新增 required 字段，需重解析
+  - `INCOMPATIBLE`: 主版本变更，不兼容
+- `check_schema_compatibility()`: 返回 `(is_compatible, reason)` 元组
+- `check_and_mark_stale_for_all()`: 批量检查并标记陈旧
+- 预置默认 schema: 1.0.0, 1.1.0, 1.2.0（新增 required device_serial）, 2.0.0
+- 新增单测: 7个测试类，20个测试方法
 
