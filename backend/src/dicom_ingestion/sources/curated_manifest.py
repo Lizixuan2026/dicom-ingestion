@@ -39,6 +39,7 @@ class _DataFileEntry:
     path: Path
     relative_path: str
     sample_id: str
+    sample_container: str
     size_bytes: int
 
 
@@ -116,8 +117,8 @@ class CuratedUploadManifestSource:
     def _read_manifest_json(self) -> dict[str, Any]:
         try:
             raw = self.manifest_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise CuratedManifestError("CuratedManifestUnreadable", str(exc)) from exc
+        except OSError:
+            raise CuratedManifestError("CuratedManifestUnreadable", "manifest unreadable") from None
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -152,7 +153,7 @@ class CuratedUploadManifestSource:
         if not isinstance(raw_annotations, list):
             result.errors.append(
                 {
-                    "path": str(self.manifest_path),
+                    "path": self.manifest_path.name,
                     "error_code": "CuratedManifestInvalidJson",
                     "error_detail": "annotation must be a list",
                 }
@@ -164,7 +165,7 @@ class CuratedUploadManifestSource:
             if not isinstance(entry, dict):
                 result.errors.append(
                     {
-                        "path": str(self.manifest_path),
+                        "path": self.manifest_path.name,
                         "error_code": "CuratedManifestInvalidJson",
                         "error_detail": f"annotation[{index}] must be an object",
                     }
@@ -174,7 +175,7 @@ class CuratedUploadManifestSource:
             if not isinstance(path_value, str) or not path_value.strip():
                 result.errors.append(
                     {
-                        "path": str(self.manifest_path),
+                        "path": self.manifest_path.name,
                         "error_code": "CuratedManifestInvalidJson",
                         "error_detail": f"annotation[{index}] missing path",
                     }
@@ -209,9 +210,7 @@ class CuratedUploadManifestSource:
                     pending_required_labels.append(label_name)
                 result.errors.append(
                     {
-                        "path": normalize_relative_path(resolved.relative_to(manifest_dir))
-                        if is_relative_to(resolved, manifest_dir)
-                        else path_value,
+                        "path": path_value,
                         "error_code": "AnnotationPathMissing",
                         "error_detail": "annotation path does not exist",
                     }
@@ -260,19 +259,19 @@ class CuratedUploadManifestSource:
         if not any(is_relative_to(resolved, root) for root in self.allowed_roots):
             raise CuratedManifestError(
                 fatal_outside_code if fatal else "AnnotationPathOutsideAllowedRoot",
-                f"path outside allowed roots: {resolved}",
+                "path outside allowed roots",
             )
         if not resolved.exists():
             raise CuratedManifestError(
                 fatal_invalid_code if fatal else "AnnotationPathMissing",
-                f"path does not exist: {resolved}",
+                "path does not exist",
             )
         if must_be_dir and not resolved.is_dir():
-            raise CuratedManifestError(fatal_invalid_code, f"path is not a directory: {resolved}")
+            raise CuratedManifestError(fatal_invalid_code, "path is not a directory")
         if not must_be_dir and not resolved.is_file() and not resolved.is_dir():
             raise CuratedManifestError(
                 fatal_invalid_code if fatal else "AnnotationPathInvalid",
-                f"path is not a file or directory: {resolved}",
+                "path is not a file or directory",
             )
         return resolved
 
@@ -286,29 +285,32 @@ class CuratedUploadManifestSource:
             except OSError:
                 continue
             rel_to_data = path.relative_to(data_path)
-            sample_id = self._sample_id_for_relative(rel_to_data)
+            sample_id, sample_container = self._sample_identity(rel_to_data)
             rel_to_manifest = normalize_relative_path(path.relative_to(manifest_dir))
             entries.append(
                 _DataFileEntry(
                     path=path,
                     relative_path=rel_to_manifest,
                     sample_id=sample_id,
+                    sample_container=sample_container,
                     size_bytes=stat.st_size,
                 )
             )
         return entries
 
-    def _sample_id_for_relative(self, rel_to_data: Path) -> str:
+    def _sample_identity(self, rel_to_data: Path) -> tuple[str, str]:
         parts = rel_to_data.parts
         if len(parts) == 1:
-            return rel_to_data.stem
-        return parts[0]
+            rel = normalize_relative_path(rel_to_data)
+            return rel_to_data.stem, f"file:{rel}"
+        folder = parts[0]
+        return folder, f"dir:{folder}"
 
     def _duplicate_sample_ids(self, entries: list[_DataFileEntry]) -> set[str]:
-        by_id: dict[str, list[_DataFileEntry]] = {}
+        containers_by_id: dict[str, set[str]] = {}
         for entry in entries:
-            by_id.setdefault(entry.sample_id, []).append(entry)
-        return {sample_id for sample_id, group in by_id.items() if len(group) > 1}
+            containers_by_id.setdefault(entry.sample_id, set()).add(entry.sample_container)
+        return {sample_id for sample_id, containers in containers_by_id.items() if len(containers) > 1}
 
     def _match_annotations(
         self,

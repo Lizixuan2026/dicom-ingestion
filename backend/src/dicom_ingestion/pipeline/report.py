@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from collections import Counter
@@ -52,6 +53,25 @@ def sanitize_for_report(value: Any) -> Any:
     if isinstance(value, list):
         return [sanitize_for_report(item) for item in value]
     return value
+
+
+def sanitize_source_error(err: dict[str, str]) -> dict[str, str]:
+    """Sanitize source enumeration errors before they appear in report rejections."""
+    path = err.get("path", "")
+    detail = err.get("error_detail", "")
+    if path:
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            path = path_obj.name
+    if ": " in detail:
+        _message, _, tail = detail.partition(": ")
+        if tail.startswith("/"):
+            detail = _message
+    return {
+        "path": path,
+        "error_code": err.get("error_code", "SourceError"),
+        "error_detail": detail,
+    }
 
 
 class Batch7ReportBuilder:
@@ -104,8 +124,12 @@ class Batch7ReportBuilder:
             for item in rejected
         ]
         rejection_rows.extend(
-            {"relative_path": err.get("path", ""), "reason": err.get("error_code", "SourceError"), "detail": err.get("error_detail", "")}
-            for err in (source_errors or [])
+            {
+                "relative_path": sanitized["path"],
+                "reason": sanitized["error_code"],
+                "detail": sanitized["error_detail"],
+            }
+            for sanitized in (sanitize_source_error(err) for err in (source_errors or []))
         )
 
         return Batch7IngestReport(

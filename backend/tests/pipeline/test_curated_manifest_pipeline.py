@@ -151,6 +151,49 @@ def test_curated_manifest_required_annotation_missing_rejects_item(tmp_path):
     assert any(row["reason"] == "RequiredAnnotationMissing" for row in report["rejections"])
 
 
+def test_curated_manifest_fatal_error_preserves_specific_error_code_in_report(tmp_path):
+    root = tmp_path / "package"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    manifest = root / "data_manifest.json"
+    manifest.write_text(json.dumps({"data": str(outside), "annotation": []}), encoding="utf-8")
+
+    result = make_scheduler(tmp_path / "store").run(
+        source=CuratedUploadManifestSource(manifest, allowed_roots=[root]),
+        actor_id="uploader-1",
+    )
+    report = result.report.to_dict()
+
+    assert any(row["reason"] == "CuratedManifestDataPathOutsideAllowedRoot" for row in report["rejections"])
+    assert str(tmp_path) not in json.dumps(report["rejections"])
+
+
+def test_curated_manifest_optional_missing_annotation_report_excludes_absolute_path(tmp_path):
+    root = tmp_path / "package"
+    data = root / "data"
+    data.mkdir(parents=True)
+    write_dicom(data / "sample_001.dcm")
+    manifest = root / "data_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "data": "data",
+                "annotation": [{"path": "missing_label", "task_type": "detection", "required": False}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = make_scheduler(tmp_path / "store").run(
+        source=CuratedUploadManifestSource(manifest, allowed_roots=[root]),
+        actor_id="uploader-1",
+    ).report.to_dict()
+
+    assert str(tmp_path) not in json.dumps(report["rejections"])
+    assert any(row["reason"] == "AnnotationPathMissing" for row in report["rejections"])
+
+
 def test_curated_manifest_optional_annotation_missing_does_not_reject_item(tmp_path):
     manifest = build_curated_package(tmp_path, required_label=False, include_label=False)
     result = make_scheduler(tmp_path / "store").run(

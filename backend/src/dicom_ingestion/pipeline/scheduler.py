@@ -128,11 +128,13 @@ class Batch7PipelineScheduler:
             return PipelineResult(job=job, items=items, report=report, source_errors=source_errors)
         except Exception as exc:
             job.fail(str(exc))
+            error_code = getattr(exc, "error_code", "JobFatalError")
+            error_detail = getattr(exc, "detail", str(exc))
             report = self.report_builder.build(
                 job=job,
                 items=items,
                 source_summary={"type": getattr(source, "source_kind", "unknown"), "root_label": getattr(source, "source_label", "")},
-                source_errors=source_errors + [{"path": "", "error_code": "JobFatalError", "error_detail": str(exc)}],
+                source_errors=source_errors + [{"path": "", "error_code": error_code, "error_detail": error_detail}],
             )
             job.metadata["report"] = report.to_dict()
             return PipelineResult(job=job, items=items, report=report, source_errors=source_errors)

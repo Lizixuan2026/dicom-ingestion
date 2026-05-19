@@ -166,6 +166,50 @@ def test_curated_manifest_duplicate_sample_id_is_visible(tmp_path):
     assert any(err["error_code"] == "DuplicateCuratedSampleId" for err in result.errors)
 
 
+def test_curated_manifest_folder_sample_allows_multiple_data_files(tmp_path):
+    root = tmp_path / "package"
+    data = root / "data" / "sample_001"
+    label1 = root / "label1"
+    data.mkdir(parents=True)
+    label1.mkdir()
+    (data / "image_1.dcm").write_bytes(b"\x00" * 128 + b"DICM")
+    (data / "image_2.dcm").write_bytes(b"\x00" * 128 + b"DICM")
+    (label1 / "sample_001").mkdir()
+
+    manifest = root / "data_manifest.json"
+    write_manifest(
+        manifest,
+        {"data": "data", "annotation": [{"path": "label1", "task_type": "segmentation"}]},
+    )
+
+    result = CuratedUploadManifestSource(manifest, allowed_roots=[root]).enumerate()
+
+    assert len(result.items) == 2
+    paths = {item.original_relative_path for item in result.items}
+    assert paths == {"data/sample_001/image_1.dcm", "data/sample_001/image_2.dcm"}
+    assert all(item.annotations[0].source_relative_path == "label1/sample_001" for item in result.items)
+    assert not any(err["error_code"] == "DuplicateCuratedSampleId" for err in result.errors)
+
+
+def test_curated_manifest_source_errors_do_not_leak_absolute_paths(tmp_path):
+    root = tmp_path / "package"
+    data = root / "data"
+    data.mkdir(parents=True)
+    (data / "sample_001.dcm").write_bytes(b"\x00" * 128 + b"DICM")
+
+    manifest = root / "data_manifest.json"
+    write_manifest(
+        manifest,
+        {"data": "data", "annotation": [{"path": "missing_label", "required": False}]},
+    )
+
+    result = CuratedUploadManifestSource(manifest, allowed_roots=[root]).enumerate()
+    blob = json.dumps(result.errors)
+
+    assert str(tmp_path) not in blob
+    assert "/private/" not in blob
+
+
 def test_curated_manifest_preserves_task_type_as_tag(tmp_path):
     root = tmp_path / "package"
     data = root / "data"
