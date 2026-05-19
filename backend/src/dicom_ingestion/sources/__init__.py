@@ -1,7 +1,7 @@
 """Batch 7 ingest source abstractions."""
 from .base import IngestSourceItem, SourceEnumerationResult, SourceKind
 from .local_folder import LocalFolderSource
-from .manifest import ManifestSource
+from .file_list_manifest import FileListManifestSource
 from .zip_adapter import ZipArchiveSourceAdapter
 
 __all__ = [
@@ -9,6 +9,6 @@ __all__ = [
     "SourceEnumerationResult",
     "SourceKind",
     "LocalFolderSource",
-    "ManifestSource",
+    "FileListManifestSource",
     "ZipArchiveSourceAdapter",
 ]

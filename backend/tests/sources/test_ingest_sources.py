@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dicom_ingestion.sources import LocalFolderSource, ManifestSource, ZipArchiveSourceAdapter
+from dicom_ingestion.sources import FileListManifestSource, LocalFolderSource, ZipArchiveSourceAdapter
 
 
 def dicom_magic_bytes(payload: bytes = b"payload") -> bytes:
@@ -58,13 +58,13 @@ def test_local_folder_source_reports_unreadable_file(monkeypatch, tmp_path):
     assert result.errors[0]["error_code"] == "SourceFileUnreadable"
 
 
-def test_manifest_source_rejects_paths_outside_allowed_root(tmp_path):
+def test_file_list_manifest_source_rejects_paths_outside_allowed_root(tmp_path):
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     outside = tmp_path / "outside.dcm"
     outside.write_bytes(dicom_magic_bytes())
 
-    result = ManifestSource([outside], allowed_roots=[allowed]).enumerate()
+    result = FileListManifestSource([outside], allowed_roots=[allowed]).enumerate()
 
     assert result.items == []
     assert result.errors[0]["error_code"] == "ManifestPathOutsideAllowedRoot"

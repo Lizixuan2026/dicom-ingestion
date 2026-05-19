@@ -1,4 +1,4 @@
-"""Manifest ingest source."""
+"""Explicit file-list ingest source (not user curated data_manifest.json)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,15 +7,19 @@ from typing import Iterable, Mapping, Any
 from .base import IngestSourceItem, SourceEnumerationResult, SourceKind, is_relative_to
 
 
-class ManifestSource:
-    """Enumerate explicitly listed local files under configured roots."""
+class FileListManifestSource:
+    """Enumerate explicitly listed local files under configured roots.
+
+    This is a low-level file path list for pipeline core — not the user-facing
+    curated ``data_manifest.json`` adapter (deferred to Phase 2.5).
+    """
 
     def __init__(
         self,
         entries: Iterable[str | Path | Mapping[str, Any]],
         *,
         allowed_roots: Iterable[str | Path],
-        source_label: str = "manifest",
+        source_label: str = "file_list_manifest",
     ) -> None:
         self.entries = list(entries)
         self.allowed_roots = [Path(root).expanduser().resolve() for root in allowed_roots]
@@ -23,7 +27,7 @@ class ManifestSource:
 
     @property
     def source_kind(self) -> str:
-        return SourceKind.MANIFEST.value
+        return SourceKind.FILE_LIST_MANIFEST.value
 
     @property
     def source_label(self) -> str:

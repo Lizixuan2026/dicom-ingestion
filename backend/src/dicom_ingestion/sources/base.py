@@ -15,7 +15,7 @@ class SourceKind(str, Enum):
     """Supported source kinds for pipeline input."""
 
     LOCAL_FOLDER = "local_folder"
-    MANIFEST = "manifest"
+    FILE_LIST_MANIFEST = "file_list_manifest"
     ZIP = "zip"
 
 
