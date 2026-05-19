@@ -30,12 +30,15 @@
 - **7F**: Ingest Report + Conflict UI - 报告生成与冲突管理
 
 ### Phase 3: 产品表面
-- **8A**: Adapter Layer - IngestSource + Storage 适配器契约
-- **8B**: Workflow API - 多源输入支持
-- **8C**: Review Workflow - 审查工作流集成
-- **8D**: Platform Binding - Series/Study/Patient 绑定
-- **8E**: CLI Admin Tools - 管理命令行工具
-- **8F**: Auth/Perms - 认证与权限
+- **8A**: Ingest Job API - 摄入作业管理接口
+- **8B**: Adapter Layer - IngestSource + Storage 适配器契约
+- **8C**: Workflow API - 多源输入支持
+- **8D**: Review Workflow - 审查工作流集成
+- **8E**: Platform Binding - Series/Study/Patient 绑定
+- **8F**: CLI Admin Tools - 管理命令行工具
+- **8G**: Auth/Perms - 认证与权限
+
+> **版本对齐说明 (2026-05-19)**: 8A 统一为 Ingest Job API，与评审文档保持一致
 
 ---
 

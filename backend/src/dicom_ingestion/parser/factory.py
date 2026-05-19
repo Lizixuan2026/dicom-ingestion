@@ -23,7 +23,9 @@ class ParseResult:
     file_meta: Dict[str, any]
     extractors_used: List[str]
     warnings: List[str]
+    errors: List[str]  # Task B: 区分 warnings 与 errors
     schema_version: str
+    success: bool  # Task B: 解析是否成功
 
 
 class DicomParserFactory:
@@ -101,10 +103,12 @@ class ConfigurableDicomParser:
         解析DICOM文件
 
         决策 Gap-5: 流式头部解析 + 延迟像素数据加载
+        Task B: required 标签强制校验
         """
         import pydicom
 
         warnings = []
+        errors = []  # Task B: 收集不可恢复错误
         file_path_obj = Path(file_path)
 
         # 检查文件大小，大文件特殊处理
@@ -125,14 +129,47 @@ class ConfigurableDicomParser:
 
         tags = {}
         extractors_used = []
+        missing_required = []  # Task B: 收集缺失的 required 字段
 
         # 1. 提取标准标签
         for std_config in self.schema.get('extractors', {}).get('standard', []):
             value = self._extract_standard_tag(ds, std_config)
-            if value is not None:
-                tags[std_config['alias']] = value
+            alias = std_config['alias']
+            is_required = std_config.get('required', False)
 
-        # 2. 提取设备元数据
+            if value is not None:
+                tags[alias] = value
+            elif is_required:
+                # Task B: required 字段缺失，记录错误
+                missing_required.append({
+                    'alias': alias,
+                    'tag': std_config['tag'],
+                    'description': f"Required tag {std_config['tag']} ({alias}) is missing"
+                })
+
+        # Task B: 如果有缺失的 required 字段，构建错误信息
+        if missing_required:
+            missing_names = [m['alias'] for m in missing_required]
+            error_msg = f"Missing required tags: {', '.join(missing_names)}"
+            errors.append(error_msg)
+            logger.error(f"Parse failed for {file_path}: {error_msg}")
+
+            # 返回失败的解析结果
+            return ParseResult(
+                tags=tags,
+                file_meta={
+                    "file_size": file_size,
+                    "file_path": str(file_path),
+                    "transfer_syntax": None
+                },
+                extractors_used=[],
+                warnings=warnings,
+                errors=errors,
+                schema_version=self.schema.get('schema_version', '1.0'),
+                success=False
+            )
+
+        # 2. 提取设备元数据 (optional)
         for device_config in self.schema.get('extractors', {}).get('device', []):
             value = self._extract_standard_tag(ds, device_config)
             if value is not None:
@@ -151,7 +188,10 @@ class ConfigurableDicomParser:
                         tags.update(extracted)
                         extractors_used.append(extractor.name)
                 except Exception as e:
-                    logger.warning(f"Extractor {extractor.name} failed: {e}")
+                    # Task B: 提取器异常作为 warning（可恢复），不影响整体解析
+                    warning_msg = f"Extractor {extractor.name} failed: {e}"
+                    warnings.append(warning_msg)
+                    logger.warning(warning_msg)
 
         # 文件元数据
         file_meta = {
@@ -165,7 +205,9 @@ class ConfigurableDicomParser:
             file_meta=file_meta,
             extractors_used=extractors_used,
             warnings=warnings,
-            schema_version=self.schema.get('schema_version', '1.0')
+            errors=errors,
+            schema_version=self.schema.get('schema_version', '1.0'),
+            success=len(errors) == 0
         )
 
     def _extract_standard_tag(self, ds, config: dict) -> any:
@@ -201,8 +243,38 @@ class ConfigurableDicomParser:
 
 
 class ParseError(Exception):
-    """解析错误"""
-    pass
+    """
+    解析错误
+
+    Task B: 结构化错误信息，包含缺失的 required 字段详情
+    """
+
+    def __init__(
+        self,
+        message: str,
+        missing_required: Optional[List[Dict]] = None,
+        file_path: Optional[str] = None
+    ):
+        super().__init__(message)
+        self.message = message
+        self.missing_required = missing_required or []
+        self.file_path = file_path
+
+    def to_dict(self) -> Dict:
+        """转换为字典格式，便于API返回"""
+        return {
+            'error_type': 'ParseError',
+            'message': self.message,
+            'file_path': self.file_path,
+            'missing_required': self.missing_required,
+            'error_code': 'REQUIRED_TAGS_MISSING' if self.missing_required else 'PARSE_ERROR'
+        }
+
+    def __str__(self) -> str:
+        if self.missing_required:
+            fields = ', '.join([m['alias'] for m in self.missing_required])
+            return f"ParseError: {self.message} (missing: {fields})"
+        return f"ParseError: {self.message}"
 
 
 # 自动注册提取器

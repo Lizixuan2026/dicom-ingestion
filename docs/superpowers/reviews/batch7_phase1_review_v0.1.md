@@ -163,3 +163,44 @@
 - 当前状态：`DONE_WITH_CONCERNS`
 - 建议下一状态：`READY_FOR_PHASE2`（前提：Task A/B 完成并通过回归）
 
+---
+
+## 七、修复记录
+
+### 2026-05-19 - P0 问题修复完成
+
+| 问题 | 状态 | 修复内容 |
+|------|------|---------|
+| **P0-1** | ✅ FIXED | 统一 Batch 8 编号语义：8A = Ingest Job API，后续编号顺延至 8G |
+| **P0-2** | ✅ FIXED | 实现 required 标签强制校验，缺失时解析失败并返回结构化错误 |
+
+### 修复详情
+
+#### P0-1 修复
+- 修订 `README.md`: 更新 Phase 3 组件编号（8A~8G）
+- 修订 `phase3_product_surface_design.md`:
+  - 新增 8A: Ingest Job API 章节
+  - 原 8A (Adapter) → 8B
+  - 原 8B (Workflow) → 8C
+  - 原 8C (Review) → 8D
+  - 原 8D (Platform) → 8E
+  - 原 8E (CLI) → 8F
+  - 原 8F (Auth) → 8G
+- 添加版本对齐说明注释
+
+#### P0-2 修复
+- 修改 `ConfigurableDicomParser.parse()`:
+  - 收集所有缺失的 required 字段
+  - 缺失时设置 `success=False` 并填充 `errors` 列表
+  - 区分 `warnings`（可恢复）与 `errors`（不可恢复）
+- 增强 `ParseError` 类:
+  - 添加 `missing_required` 字段存储缺失详情
+  - 添加 `to_dict()` 方法便于 API 序列化
+  - 改进 `__str__` 格式显示缺失字段列表
+- 新增单测 `tests/parser/test_configurable_parser.py`:
+  - `TestRequiredTagValidation`: required 缺失导致解析失败
+  - `TestOptionalTagHandling`: optional 缺失不影响成功
+  - `TestTransformValidation`: uppercase/lowercase transform 生效
+  - `TestPrivateExtractorErrorIsolation`: 提取器异常作为 warning
+  - `TestParseErrorStructure`: ParseError 结构化信息验证
+

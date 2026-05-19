@@ -1,9 +1,14 @@
 # Phase 3: 产品表面 - 详细设计
 
 **目标**: 实现面向用户的产品功能：工作流API、查询端点、适配器层
-**交付顺序**: 8A → 8B → 8C → 8D → 8E → 8F
+**交付顺序**: 8A → 8B → 8C → 8D → 8E → 8F → 8G
 **预计工期**: 3-4 周
 **依赖**: Phase 2 (7D, 7E, 7F)
+
+> **版本对齐说明 (2026-05-19)**: 
+> - 8A 统一为 Ingest Job API
+> - 原 8A (Adapter Layer) 调整为 8B
+> - 后续编号顺延，确保与评审文档一致
 
 ---
 
@@ -15,7 +20,7 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                        Adapter Layer (8A)                            │   │
+│  │                        Adapter Layer (8B)                            │   │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │   │
 │  │  │ IngestSource │  │  Storage     │  │  Query       │              │   │
 │  │  │ Adapter      │  │  Adapter     │  │  Adapter     │              │   │
@@ -24,7 +29,7 @@
 │                                    │                                       │
 │                                    ▼                                       │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Workflow API (8B)                                 │   │
+│  │                    Workflow API (8C)                                 │   │
 │  │  POST /api/v1/ingest/folder        GET /api/v1/series                │   │
 │  │  POST /api/v1/ingest/zip           GET /api/v1/studies               │   │
 │  │  POST /api/v1/ingest/manifest      GET /api/v1/patients              │   │
@@ -33,7 +38,7 @@
 │                                    │                                       │
 │                                    ▼                                       │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Review Workflow (8C)                              │   │
+│  │                    Review Workflow (8D)                              │   │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │   │
 │  │  │ Conflict     │  │  QA Review   │  │  Approval    │              │   │
 │  │  │ Detection    │  │  Workflow    │  │  Chain       │              │   │
@@ -42,7 +47,7 @@
 │                                    │                                       │
 │                                    ▼                                       │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Platform Binding (8D)                             │   │
+│  │                    Platform Binding (8E)                             │   │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │   │
 │  │  │ Series       │  │  Study       │  │  Patient     │              │   │
 │  │  │ Binding      │  │  Binding     │  │  Binding     │              │   │
@@ -51,7 +56,7 @@
 │                                    │                                       │
 │                                    ▼                                       │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    CLI Admin Tools (8E)                            │   │
+│  │                    CLI Admin Tools (8F)                            │   │
 │  │  dicom-ingest job list    dicom-ingest job retry                   │   │
 │  │  dicom-ingest conflict ls dicom-ingest conflict resolve            │   │
 │  │  dicom-ingest storage sync dicom-ingest report generate            │   │
@@ -59,7 +64,7 @@
 │                                    │                                       │
 │                                    ▼                                       │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Auth/Perms (8F)                                 │   │
+│  │                    Auth/Perms (8G)                                 │   │
 │  │  Token-based Auth  │  RBAC  │  Audit Logging  │  Service Accounts    │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -68,7 +73,91 @@
 
 ---
 
-## 8A: Adapter Layer - IngestSource + Storage Adapter Contracts
+## 8A: Ingest Job API - Folder Ingest + Job Management
+
+### 目标
+建立统一的摄入作业管理接口，支持文件夹、ZIP、清单等多种输入源
+
+### REST API 规范
+
+```yaml
+# API: Ingest Job Management
+
+POST /api/v1/ingest/folder
+  summary: 创建文件夹摄入作业
+  security:
+    - bearerAuth: []
+  requestBody:
+    content:
+      application/json:
+        schema:
+          type: object
+          required: [folder_path]
+          properties:
+            folder_path:
+              type: string
+              description: 绝对路径
+            recursive:
+              type: boolean
+              default: true
+            priority:
+              type: integer
+              default: 0
+  responses:
+    201:
+      description: 作业已创建
+      body:
+        job_id: string
+        status: pending
+        estimated_files: integer
+
+POST /api/v1/ingest/zip
+  summary: 创建ZIP归档摄入作业
+  
+POST /api/v1/ingest/manifest
+  summary: 创建清单文件摄入作业
+
+GET /api/v1/ingest/jobs/{job_id}
+  summary: 查询作业状态
+  
+POST /api/v1/ingest/jobs/{job_id}/cancel
+  summary: 取消作业
+```
+
+### 实现代码
+
+```python
+# api/ingest_job_api.py
+from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+
+router = APIRouter(prefix="/api/v1/ingest")
+
+@router.post("/folder")
+async def create_folder_ingest(
+    request: FolderIngestRequest,
+    user: User = Depends(get_current_user)
+):
+    """创建文件夹摄入作业"""
+    # 验证路径存在且可访问
+    # 创建作业记录
+    # 返回作业ID
+    pass
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """获取作业状态和进度"""
+    pass
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    """取消进行中的作业"""
+    pass
+```
+
+---
+
+## 8B: Adapter Layer - IngestSource + Storage Adapter Contracts
 
 ### 目标
 建立清晰的适配器接口，支持未来扩展（如OHIF、第三方PACS）
@@ -541,7 +630,7 @@ def demonstrate_adapter_usage():
 
 ---
 
-## 8B: Workflow API - 多源输入支持
+## 8C: Workflow API - 多源输入支持
 
 ### REST API 完整规范
 
@@ -929,7 +1018,7 @@ components:
 
 ---
 
-## 8C: Review Workflow 集成
+## 8D: Review Workflow 集成
 
 ### 工作流设计
 
@@ -1136,7 +1225,7 @@ class ReviewWorkflow:
 
 ---
 
-## 8D: 平台绑定 - Series/Study/Patient
+## 8E: 平台绑定 - Series/Study/Patient
 
 ### 绑定数据模型
 
@@ -1311,7 +1400,7 @@ class BindingManager:
 
 ---
 
-## 8E: CLI Admin Tools
+## 8F: CLI Admin Tools
 
 ### CLI设计
 
@@ -1554,7 +1643,7 @@ def get_authenticated_client():
 
 ---
 
-## 8F: Authentication & Permissions
+## 8G: Authentication & Permissions
 
 ### 认证实现
 
