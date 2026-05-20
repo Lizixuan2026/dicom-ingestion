@@ -4,10 +4,16 @@
 **交付顺序**: 7D → 7E → 7F
 **预计工期**: 3-4 周
 **依赖**: Phase 1 (7A, 7B, 7C)
+**Design correction**: Manifest 与 annotation scope 以 `phase2_manifest_annotation_scope_correction.md` 为准；`data_manifest.json` 是用户侧组织说明，不在 Phase 2 引入完整 Dataset 模型。
+
+**Current implementation target (2026-05-19)**: In-process pipeline core only. Redis/RMQ/Celery and DB-backed async workers are **deferred** — not part of the current Phase 2 delivery. See `phase2_next_execution_plan.md` for closeout steps.
+
 
 ---
 
 ## 系统架构概览
+
+> **Note**: The diagram below includes future hardening components (Task Queue, async ParseWorker, DB state machine). These are **not** in the current Phase 2A/2B in-process implementation.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐

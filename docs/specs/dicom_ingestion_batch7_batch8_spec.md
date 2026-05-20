@@ -323,17 +323,18 @@ Current implementation already has ZIP scanning and ZIP safety. Batch 7 should n
 IngestSource
   - ZipArchiveSource(existing scanner/ZIP safety path)
   - LocalFolderSource(root_path)
-  - ManifestSource(entries[])
+  - FileListManifestSource(entries[])
+  - Curated data_manifest.json deferred to Phase 2.5
 ```
 
-The new Batch 7 work is mainly `LocalFolderSource` and `ManifestSource`, plus making ZIP, folder, and manifest share the same downstream item contract. The service should consume an abstract enumerator, not directly depend on local filesystem walking or ZIP internals.
+The new Batch 7 work is mainly `LocalFolderSource` and `FileListManifestSource`, plus making ZIP, folder, and explicit file-list manifest share the same downstream item contract. The service should consume an abstract enumerator, not directly depend on local filesystem walking or ZIP internals.
 
 ### Proposed Item Shape
 
 ```python
 @dataclass
 class IngestSourceItem:
-    source_kind: Literal["local_folder", "zip", "manifest"]
+    source_kind: Literal["local_folder", "zip", "file_list_manifest"]
     original_relative_path: str
     size_bytes: int
     content_type_guess: str | None
@@ -351,12 +352,12 @@ class IngestSourceItem:
 ### Acceptance Criteria
 
 - Nested folder input works.
-- Manifest input works and preserves source-relative paths.
+- Explicit file-list manifest input works and preserves source-relative paths.
 - Existing ZIP scanner output can be adapted into the same `IngestSourceItem` contract.
 - Mixed DICOM and non-DICOM input works.
 - Empty folder produces completed job with zero accepted and clear report.
 - Unreadable file is reported and does not kill the entire job.
-- ZIP, local folder, and manifest share the same downstream ingest pipeline.
+- ZIP, local folder, and file-list manifest share the same downstream ingest pipeline.
 
 ---
 

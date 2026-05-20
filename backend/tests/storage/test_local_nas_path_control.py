@@ -128,7 +128,7 @@ class TestIterativeShortening:
         extreme_parts = ["a" * 100] * 10
         path = Path(*extreme_parts)
 
-        result = backend._ultimate_fallback(extreme_parts, len(str(path)))
+        result = backend._ultimate_fallback(extreme_parts, len(str(path)), 50)
 
         # 应该回退到 OVERFLOW 目录下的哈希路径
         assert str(result).startswith("OVERFLOW/")
@@ -387,8 +387,10 @@ class TestIntegrationPathControl:
 
         # 创建 PathGenerator 和 Storage
         generator = LocalNASPathGenerator(max_component_length=32)
+        base_path = tmp_path / "store"
+        base_path.mkdir()
         backend = LocalNASStorageBackend(
-            base_path=str(tmp_path),
+            base_path=str(base_path),
             path_generator=generator,
             create_dirs=True,
             max_path_length=240
@@ -413,42 +415,87 @@ class TestIntegrationPathControl:
         result = backend.store(str(source), "hint", tags)
 
         # 验证路径长度
-        full_path = tmp_path / result.path
+        full_path = base_path / result.path
         assert len(str(full_path)) <= 240
+        # P1-2: URI 格式应为 local-nas://
+        assert result.uri.startswith("local-nas://")
 
         # 验证文件存在
         assert full_path.exists()
 
     def test_component_and_full_path_coordination(self, tmp_path):
         """测试：Generator 组件级与 Storage 完整路径级协调"""
+        import uuid
         from dicom_ingestion.path_generator.local_nas import LocalNASPathGenerator
 
-        # Generator 限制组件 32 字符
-        generator = LocalNASPathGenerator(max_component_length=32)
-        # Storage 限制完整路径 100 字符（故意设小以触发协调）
+        # 使用一个短的 base_path 以确保有 budget 给相对路径
+        short_base = Path("/tmp") / f"dicom_test_{uuid.uuid4().hex[:8]}"
+        short_base.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Generator 限制组件 32 字符
+            generator = LocalNASPathGenerator(max_component_length=32)
+            # Storage 限制完整路径 100 字符（故意设小以触发协调）
+            backend = LocalNASStorageBackend(
+                base_path=str(short_base),
+                path_generator=generator,
+                create_dirs=True,
+                max_path_length=100
+            )
+
+            tags = {
+                'modality': 'MR',
+                'vendor': 'SIEMENS',
+                'study_uid': '1.2.3.4.5.6.7.8.9.10.11.12.13.14.15',
+                'series_uid': '1.2.3.4.5.6.7.8.9.10.11.12.13.14.16',
+                'sop_instance_uid': '1.2.3.4.5.6.7.8.9.10.11.12.13.14.17',
+            }
+
+            source = tmp_path / "source.dcm"
+            source.write_text("content")
+
+            result = backend.store(str(source), "hint", tags)
+
+            # 完整路径应该被控制
+            full_path = short_base / result.path
+            assert len(str(full_path)) <= 100
+            # P1-2: URI 格式应为 local-nas://
+            assert result.uri.startswith("local-nas://")
+        finally:
+            # 清理临时目录
+            import shutil
+            shutil.rmtree(str(short_base), ignore_errors=True)
+
+    def test_very_long_base_path_fails_fast(self, tmp_path):
+        """测试：过长的 base_path 应直接 fail fast"""
         backend = LocalNASStorageBackend(
             base_path=str(tmp_path),
-            path_generator=generator,
-            create_dirs=True,
-            max_path_length=100
+            path_generator=Mock(),
+            create_dirs=False,
+            max_path_length=50
         )
 
-        tags = {
-            'modality': 'MR',
-            'vendor': 'SIEMENS',
-            'study_uid': '1.2.3.4.5.6.7.8.9.10.11.12.13.14.15',
-            'series_uid': '1.2.3.4.5.6.7.8.9.10.11.12.13.14.16',
-            'sop_instance_uid': '1.2.3.4.5.6.7.8.9.10.11.12.13.14.17',
-        }
+        # base_path 本身已经超过 max_path_length，相对路径 budget 为负
+        with pytest.raises(StorageError) as exc_info:
+            backend._ensure_path_length(tmp_path / "test.dcm")
 
-        source = tmp_path / "source.dcm"
-        source.write_text("content")
+        assert "Base path too long" in str(exc_info.value)
 
-        result = backend.store(str(source), "hint", tags)
+    def test_fallback_path_preserves_deterministic_hash(self, tmp_path):
+        """测试：fallback 路径的 hash 是确定性的"""
+        backend = LocalNASStorageBackend(
+            base_path=str(tmp_path),
+            path_generator=Mock(),
+            create_dirs=False,
+            max_path_length=80
+        )
 
-        # 完整路径应该被控制
-        full_path = tmp_path / result.path
-        assert len(str(full_path)) <= 100
+        parts = ["a" * 50] * 5
+        fallback1 = backend._ultimate_fallback(parts, 999, 50)
+        fallback2 = backend._ultimate_fallback(parts, 999, 50)
+
+        assert fallback1 == fallback2
+        assert str(fallback1).startswith("OVERFLOW/")
 
 
 if __name__ == "__main__":

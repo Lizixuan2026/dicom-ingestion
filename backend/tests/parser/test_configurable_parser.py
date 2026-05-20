@@ -324,6 +324,98 @@ class TestPrivateExtractorErrorIsolation:
         assert "failed" in result.warnings[0]
 
 
+class TestDefaultSchemaPatientName:
+    """P2-1: 默认 schema 中 patient_name 为 optional"""
+
+    def test_missing_patient_name_does_not_fail_by_default(self):
+        """测试：默认 schema 下缺少 PatientName 不导致解析失败"""
+        mock_ds = Mock()
+        mock_ds.file_meta = Mock()
+        mock_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2"
+        # 缺少 patient_name，但其他 required 都在
+        mock_ds.get = Mock(side_effect=lambda tag: {
+            (0x0020, 0x000D): "1.2.3.4.5",      # study_uid (required)
+            (0x0020, 0x000E): "1.2.3.4.6",      # series_uid (required)
+            (0x0008, 0x0018): "1.2.3.4.7",      # sop_instance_uid (required)
+            (0x0008, 0x0060): "MR",             # modality (required)
+        }.get(tag))
+
+        # 使用默认 schema（通过 factory 获取）
+        from dicom_ingestion.parser.factory import DicomParserFactory
+        default_schema = DicomParserFactory._get_default_schema()
+        parser = ConfigurableDicomParser(default_schema, {})
+
+        with patch('pydicom.dcmread', return_value=mock_ds):
+            with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
+                result = parser.parse("/fake/path.dcm")
+
+        # P2-1: 默认 intake 不因 PatientName 缺失失败
+        assert result.success is True
+        assert len(result.errors) == 0
+        assert 'patient_name' not in result.tags
+
+    def test_custom_schema_can_require_patient_name(self):
+        """测试：自定义 schema 可以将 PatientName 设为 required"""
+        mock_ds = Mock()
+        mock_ds.file_meta = Mock()
+        mock_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2"
+        # 缺少 patient_name
+        mock_ds.get = Mock(side_effect=lambda tag: {
+            (0x0020, 0x000D): "1.2.3.4.5",
+            (0x0020, 0x000E): "1.2.3.4.6",
+            (0x0008, 0x0018): "1.2.3.4.7",
+            (0x0008, 0x0060): "MR",
+        }.get(tag))
+
+        custom_schema = {
+            "schema_version": "1.0",
+            "extractors": {
+                "standard": [
+                    {"tag": "(0010,0010)", "alias": "patient_name", "required": True},
+                    {"tag": "(0020,000D)", "alias": "study_uid", "required": True},
+                    {"tag": "(0020,000E)", "alias": "series_uid", "required": True},
+                    {"tag": "(0008,0018)", "alias": "sop_instance_uid", "required": True},
+                    {"tag": "(0008,0060)", "alias": "modality", "required": True},
+                ]
+            }
+        }
+
+        parser = ConfigurableDicomParser(custom_schema, {})
+
+        with patch('pydicom.dcmread', return_value=mock_ds):
+            with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
+                result = parser.parse("/fake/path.dcm")
+
+        # 自定义 schema 要求 patient_name，缺失时应失败
+        assert result.success is False
+        assert "patient_name" in result.errors[0]
+
+    def test_missing_study_series_sop_uid_still_fails(self):
+        """测试：默认 schema 下缺少 DICOM identity UID 仍失败"""
+        mock_ds = Mock()
+        mock_ds.file_meta = Mock()
+        mock_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2"
+        # 有 patient_name，但缺少 study_uid
+        mock_ds.get = Mock(side_effect=lambda tag: {
+            (0x0010, 0x0010): "Test Patient",
+            (0x0020, 0x000E): "1.2.3.4.6",      # series_uid
+            (0x0008, 0x0018): "1.2.3.4.7",      # sop_instance_uid
+            (0x0008, 0x0060): "MR",             # modality
+        }.get(tag))
+
+        from dicom_ingestion.parser.factory import DicomParserFactory
+        default_schema = DicomParserFactory._get_default_schema()
+        parser = ConfigurableDicomParser(default_schema, {})
+
+        with patch('pydicom.dcmread', return_value=mock_ds):
+            with patch.object(Path, 'stat', return_value=Mock(st_size=1024)):
+                result = parser.parse("/fake/path.dcm")
+
+        # DICOM identity UID 缺失仍应失败
+        assert result.success is False
+        assert "study_uid" in result.errors[0]
+
+
 class TestParseErrorStructure:
     """Task B: ParseError 结构化错误信息测试"""
 
